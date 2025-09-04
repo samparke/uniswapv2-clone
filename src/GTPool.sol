@@ -5,8 +5,11 @@ import {GTFactory} from "./GTFactory.sol";
 import {IGTFactory} from "../src/interfaces/IGTFactory.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {LP} from "./LP.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-contract GTPool {
+contract GTPool is LP {
     using SafeERC20 for IERC20;
 
     error GTPool__InsufficientOutputAmount();
@@ -19,6 +22,7 @@ contract GTPool {
     error GTPool__SlippageTooHigh();
     error GTPool__DeadlinePassed();
     error GTPool__UnknownTokens();
+    error GTPool__InsufficientLiquidityMinted();
 
     address public immutable i_token0;
     address public immutable i_token1;
@@ -28,6 +32,7 @@ contract GTPool {
     uint32 private s_blockTimestampLast;
 
     address public immutable i_factory;
+    address public immutable i_burnAddress = 0x000000000000000000000000000000000000dEaD;
 
     uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3; // 1,000 LP tokens
     uint256 public constant FEE = 3; // 0.3%
@@ -42,6 +47,7 @@ contract GTPool {
         uint256 amount1Out,
         address indexed to
     );
+    event Mint(address indexed sender, uint256 amount0, uint256 amount1);
 
     modifier zeroAddress(address inputAddress) {
         if (inputAddress == address(0)) {
@@ -50,7 +56,7 @@ contract GTPool {
         _;
     }
 
-    modifier moreThanZero(uint256 amount) {
+    modifier moreThanZero(uint256 amount) override {
         if (amount == 0) {
             revert GTPool__MoreThanZero();
         }
@@ -92,6 +98,7 @@ contract GTPool {
             revert GTPool__SlippageTooHigh();
         }
 
+        // @note CHANGE THIS TO ROUTER IMPLEMENTATION. TOKENS SENT IN WITH TRANSACTION.
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenOut).safeTransfer(to, amountOut);
 
@@ -110,8 +117,37 @@ contract GTPool {
         uint256 deadline
     ) external {}
 
-    function depositLiquidity(address token0, address token1, uint256 amount0, uint256 amount1) external {
-        // This is equivalent to the 'mint' function in Uniswap V2. Whereas in UniswapV2, to amount of liquidity deposited is calculated by subtracting the outdated reserves from the new contract token balance, we are using an amountA and amount B.
+    function mint(address to) external returns (uint256 liquidity) {
+        // Tokens have been transferred in from the Router.
+        (uint112 reserve0, uint112 reserve1,) = getReserves();
+        uint256 balance0 = IERC20(i_token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(i_token1).balanceOf(address(this));
+
+        // To calculate the amount of tokens sent in, subtract the outdated reserves from the new token balances.
+        uint256 amount0 = balance0 - reserve0;
+        uint256 amount1 = balance1 - reserve1;
+
+        // The current total supply of LP tokens.
+        uint256 _totalSupply = totalSupply();
+        // If it's the first deposit...
+        if (_totalSupply == 0) {
+            // Mint the geometric mean of the amounts.
+            liquidity = Math.sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
+            // Mint address(0) the MINIMUM_LIQUIDITY, to ensure the first depositor does not have the total supply.
+            _mint(i_burnAddress, MINIMUM_LIQUIDITY);
+        } else {
+            // Check to see user deposited correct ratio of tokens.
+            // Number of LP tokens to mint is the minimum of these two values:
+            liquidity = Math.min((amount0 * _totalSupply) / reserve0, (amount1 * _totalSupply) / reserve1);
+            // If a user only deposits one token, they will be minted 0 LP tokens, as it will be the minimum values of these two values.
+            // If a user deposits more than required for one token, they will only be minted the LP tokens which correspond with the correct token deposit amount, and extra tokens will be considered a donation to the pool.
+        }
+        if (liquidity == 0) {
+            revert GTPool__InsufficientLiquidityMinted();
+        }
+        _mint(to, liquidity);
+        _updateReserves(balance0, balance1);
+        emit Mint(msg.sender, amount0, amount1);
     }
 
     function getReserves() public view returns (uint112, uint112, uint32) {
@@ -177,4 +213,6 @@ contract GTPool {
         // amoountIn = (900,000 + 90,727 - 1) / 90,727 = 10.91, rounded down to 10. 10 tokens in for 9 tokens out.
         amountIn = (numerator + denominator - 1) / denominator;
     }
+
+    function setGtToken() external {}
 }

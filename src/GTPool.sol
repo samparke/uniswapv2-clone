@@ -23,6 +23,7 @@ contract GTPool is LP {
     error GTPool__DeadlinePassed();
     error GTPool__UnknownTokens();
     error GTPool__InsufficientLiquidityMinted();
+    error GTPool__InsufficientLiquidityBurned();
 
     address public immutable i_token0;
     address public immutable i_token1;
@@ -48,6 +49,7 @@ contract GTPool is LP {
         address indexed to
     );
     event Mint(address indexed sender, uint256 amount0, uint256 amount1);
+    event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
 
     modifier zeroAddress(address inputAddress) {
         if (inputAddress == address(0)) {
@@ -117,6 +119,11 @@ contract GTPool is LP {
         uint256 deadline
     ) external {}
 
+    /**
+     * @notice Mints address LP tokens. This function is called by the Router, with tokens transfered with the call.
+     * @param to The address we are minting LP tokens to.
+     * @return liquidity The number of LP tokens we minted.
+     */
     function mint(address to) external returns (uint256 liquidity) {
         // Tokens have been transferred in from the Router.
         (uint112 reserve0, uint112 reserve1,) = getReserves();
@@ -147,13 +154,62 @@ contract GTPool is LP {
         }
         _mint(to, liquidity);
         _updateReserves(balance0, balance1);
+        // @note Look at fee
         emit Mint(msg.sender, amount0, amount1);
     }
 
+    /**
+     * @notice Burns LP tokens. This function is called by the Router, which sends LP tokens with the call.
+     * @param to The address we are sending the pool tokens to after burn.
+     * @return amount0 The amount of i_token0 we send the user.
+     * @return amount1 The amount of i_token1 we send the user.
+     */
+    function burn(address to) external returns (uint256 amount0, uint256 amount1) {
+        // (uint112 reserve0, uint112 reserve1,) = getReserves();
+        address token0 = i_token0;
+        address token1 = i_token1;
+        uint256 balance0 = IERC20(i_token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(i_token1).balanceOf(address(this));
+
+        // Gets the amount of tokens sent in with the transaction.
+        // As the pool originally has no tokens, any increase will be the tokens transerred via this transaction.
+        uint256 liquidity = balanceOf(address(this));
+
+        uint256 _totalSupply = totalSupply();
+
+        amount0 = (liquidity * balance0) / _totalSupply;
+        amount1 = (liquidity * balance1) / _totalSupply;
+        if (amount0 == 0 || amount1 == 0) {
+            revert GTPool__InsufficientLiquidityBurned();
+        }
+        // Burn the tokens that were sent to this address, aka our LP token balance.
+        _burn(address(this), liquidity);
+        IERC20(token0).safeTransfer(to, amount0);
+        IERC20(token1).safeTransfer(to, amount1);
+
+        balance0 = IERC20(token0).balanceOf(address(this));
+        balance1 = IERC20(token1).balanceOf(address(this));
+
+        _updateReserves(balance0, balance1);
+        // @note Look at fee
+        emit Burn(msg.sender, amount0, amount1, to);
+    }
+
+    /**
+     * @notice Fetches our reserve and time last updated variables.
+     * @return s_reserve0 The token0 reserve.
+     * @return s_reserve1 The token1 reserve.
+     * @return s_blockTimestampLast The last time our reserves were updated.
+     */
     function getReserves() public view returns (uint112, uint112, uint32) {
         return (s_reserve0, s_reserve1, s_blockTimestampLast);
     }
 
+    /**
+     * @notice Updates our s_reserve0 and s_reserve1 storage variables. It is called when there has been a change to our reserves, such as a swap or a deposit of liquidity.
+     * @param balance0 The updated token0 balance.
+     * @param balance1 The updated token1 balance.
+     */
     function _updateReserves(uint256 balance0, uint256 balance1) internal {
         s_reserve0 = uint112(balance0);
         s_reserve1 = uint112(balance1);
@@ -161,6 +217,13 @@ contract GTPool is LP {
         emit Sync(s_reserve0, s_reserve1);
     }
 
+    /**
+     * @notice Calculates the amount of tokens leaving the pool from the amount that came in.
+     * @param amountIn The amount of the token entering the pool.
+     * @param reserveIn The reserve of the token entering the pool.
+     * @param reserveOut The reserve of the token leaving the pool.
+     * @return amountOut The amount of tokens leaving the pool.
+     */
     function _getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
         internal
         pure
@@ -195,6 +258,13 @@ contract GTPool is LP {
         // dy = 9.06
     }
 
+    /**
+     * @notice Calculates the amount of tokens that must enter the pool from the desired amount leaving the pool.
+     * @param amountOut The desired amount of the token leaving the pool.
+     * @param reserveIn The reserve of the token entering the pool.
+     * @param reserveOut The reserve of the token leaving the pool.
+     * @return amountIn The amount of tokens that must enter the pool for the desired amount leaving the pool.
+     */
     function _getAmountIn(uint256 amountOut, uint256 reserveIn, uint256 reserveOut)
         internal
         pure
@@ -213,6 +283,4 @@ contract GTPool is LP {
         // amoountIn = (900,000 + 90,727 - 1) / 90,727 = 10.91, rounded down to 10. 10 tokens in for 9 tokens out.
         amountIn = (numerator + denominator - 1) / denominator;
     }
-
-    function setGtToken() external {}
 }

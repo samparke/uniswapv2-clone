@@ -77,7 +77,7 @@ contract GTPair is LP, ReentrancyGuard {
     // Called once by the factory.
     // We do not pass any constructor arguments in GTPair initalisation, because this would make addresses non-deterministic (each would have different constructor arguments)
 
-    function initalise(address token0, address token1) external {
+    function initialise(address token0, address token1) external {
         if (msg.sender != i_factory) {
             revert GTPair__MustBeFactory();
         }

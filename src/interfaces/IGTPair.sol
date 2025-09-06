@@ -13,4 +13,6 @@ interface IGTPair {
     function balanceOf(address) external view returns (uint256);
 
     function getReserves() external view returns (uint112, uint112, uint32);
+
+    function initialise(address token0, address token1) external;
 }

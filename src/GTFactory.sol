@@ -3,6 +3,7 @@ pragma solidity 0.8.27;
 
 import {GTPair} from "../src/GTPair.sol";
 import {IGTFactory} from "./interfaces/IGTFactory.sol";
+import {IGTPair} from "./interfaces/IGTPair.sol";
 
 contract GTFactory is IGTFactory {
     error GTFactory__PairAlreadyExists();
@@ -53,12 +54,13 @@ contract GTFactory is IGTFactory {
         bytes32 salt = keccak256(abi.encodePacked(token0, token1));
         GTPair newPair = new GTPair{salt: salt}();
         pair = address(newPair);
+        IGTPair(pair).initialise(token0, token1);
 
         // We create two mappings, each with the different orders so that it does not matter which order token a user inputs
         getPair[tokenA][tokenB] = pair;
         getPair[tokenB][tokenA] = pair;
         allPairs.push(address(pair));
-        emit PairCreated(tokenA, tokenB, address(pair), allPairs.length);
+        emit PairCreated(token0, token1, address(pair), allPairs.length);
     }
 
     /**

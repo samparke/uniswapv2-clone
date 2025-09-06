@@ -7,6 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IGTFactory} from "./interfaces/IGTFactory.sol";
 import {GTLibrary} from "../src/libraries/GTLibrary.sol";
 import {IGTPair} from "./interfaces/IGTPair.sol";
+import {console2} from "forge-std/Test.sol";
 
 contract GTRouter {
     using SafeERC20 for IERC20;
@@ -15,9 +16,9 @@ contract GTRouter {
     error GTRouter__TokensCannotBeTheSame();
     error GTRouter__UnknownTokens();
     error GTRouter__SlippageTooHigh();
-    error GTRouter__InsufficientpairLiquidity();
     error GTRouter__InsufficientBAmount();
     error GTRouter__InsufficientAAmount();
+    error GTRouter__InsufficientAmountOut();
 
     address public immutable factory;
 
@@ -25,7 +26,7 @@ contract GTRouter {
     uint256 public constant FEE_PRECISION = 1000;
 
     modifier ensure(uint256 deadline) {
-        if (deadline >= block.timestamp) {
+        if (deadline < block.timestamp) {
             revert GTRouter__DeadlinePassed();
         }
         _;
@@ -152,7 +153,7 @@ contract GTRouter {
         IERC20(pair).safeTransferFrom(msg.sender, address(pair), liquidity);
         (uint256 amount0, uint256 amount1) = IGTPair(pair).burn(to);
         (address token0,) = GTLibrary.sortTokens(tokenA, tokenB);
-        (amountA, amountB) = token0 == tokenA ? (amount0, amount1) : (amount1, amount0);
+        (amountA, amountB) = tokenA == token0 ? (amount0, amount1) : (amount1, amount0);
         if (amountAMin > amountA) {
             revert GTRouter__InsufficientAAmount();
         }
@@ -161,108 +162,78 @@ contract GTRouter {
         }
     }
 
-    // function _swap() internal {}
-
-    // function swapExactTokensForTokens(
-    //     address tokenIn,
-    //     address tokenOut,
-    //     uint256 amountIn,
-    //     uint256 amountOutMin,
-    //     address to,
-    //     uint256 deadline
-    // ) external ensure(deadline) {
-    //     if (tokenIn == tokenOut) {
-    //         revert GTRouter__TokensCannotBeTheSame();
-    //     }
-    //     if (!((tokenIn == i_token0 && tokenOut == i_token1) || (tokenIn == i_token1 && tokenOut == i_token0))) {
-    //         revert GTRouter__UnknownTokens();
-    //     }
-    //     (uint256 _reserve0, uint256 _reserve1,) = pair.getReserves();
-    //     bool tokenInIsTokenZero = tokenIn == i_token0;
-    //     // If tokenIn is token0, reserveIn = reserve0. However, if tokenIn is token1, reserveIn is reserve1.
-    //     uint256 reserveIn = tokenInIsTokenZero ? _reserve0 : _reserve1;
-    //     // If tokenIn is token0, reserveOut = reserve1. However, if tokenIn is token1, reserveOut is reserve0.
-    //     uint256 reserveOut = tokenInIsTokenZero ? _reserve1 : _reserve0;
-
-    //     uint256 amountOut = _getAmountOut(amountIn, reserveIn, reserveOut);
-    //     if (amountOut < amountOutMin) {
-    //         revert GTRouter__SlippageTooHigh();
-    //     }
-
-    //     // @note CHANGE THIS TO ROUTER IMPLEMENTATION. TOKENS SENT IN WITH TRANSACTION.
-    //     IERC20(tokenIn).safeTransferFrom(msg.sender, address(pair), amountIn);
-    //     // IERC20(tokenOut).safeTransfer(to, amountOut);
-    //     _swap();
-    // }
-
     /**
-     * @notice Calculates the amount of tokens leaving the pair from the amount that came in.
-     * @param amountIn The amount of the token entering the pair.
-     * @param reserveIn The reserve of the token entering the pair.
-     * @param reserveOut The reserve of the token leaving the pair.
-     * @return amountOut The amount of tokens leaving the pair.
+     *
+     * @param amounts The amountsOut for each token in the path, calculated from the prior (swap exact tokens / swap tokens for exact) function
+     * @param path The sequence of token hops.
+     * @param _to The recipient of the token swap.
      */
-    function _getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
-        internal
-        pure
-        returns (
-            // moreThanZero(amountIn)
-            uint256 amountOut
-        )
-    {
-        if (reserveIn == 0 || reserveOut == 0) {
-            revert GTRouter__InsufficientpairLiquidity();
+    function _swap(uint256[] memory amounts, address[] memory path, address _to) internal {
+        for (uint256 i; i < path.length - 1; i++) {
+            (address input, address output) = (path[i], path[i + 1]);
+            (address token0,) = GTLibrary.sortTokens(input, output);
+            uint256 amountOut = amounts[i + 1];
+            // token0 is entering the pool, hence amount out = 0. E.g. 1. WETH (0) USDC (2000), 2. USDC(0) DAI(2000)
+            (uint256 amount0Out, uint256 amount1Out) =
+                input == token0 ? (uint256(0), amountOut) : (amountOut, uint256(0));
+            // If the current hop is not the second to last in the path, send tokens to the next pool in the sequence.
+            // If it is, we want to send the output tokens to the user who was to 'to' address in the swap initiation.
+            address to = i < path.length - 2 ? GTLibrary.pairFor(factory, output, path[i + 2]) : _to;
+            IGTPair(GTLibrary.pairFor(factory, input, output)).swap(amount0Out, amount1Out, to);
         }
-        // To calculate amount out with fee:
-        // dy = dx * (1 - FEE) * y / x + dx * (1 - FEE)
-
-        // We must scale these values to account for no decimals in Solidity.
-        // Let's say amountIn = 10, reserveIn = 100 and reserveOut = 100
-
-        // amountInWithFee = 10 * 997 = 9,970
-        uint256 amountInWithFee = amountIn * (FEE_PRECISION - FEE);
-        // numerator = 9,970 * 100 = 997,000
-        uint256 numerator = amountInWithFee * reserveOut;
-        // denominator = (100 * 1000) + 9,970
-        // We must scale up reserves by 1000, as we scaled up the fee.
-        //             = 100,000 + 9,970
-        //             = 109,970
-        uint256 denominator = reserveIn * FEE_PRECISION + amountInWithFee;
-        // amountOut = 997,000 / 109,970
-        //           = 9.06 (rounded down to 9)
-        amountOut = numerator / denominator;
-
-        // This is equivalent to our original formula: dy = dx * (1 - FEE) * y / x + dx * (1 - FEE)
-        // dy = 10 * 0.997 * 100 (997) / 100 + 10 * 0.997 (109.97)
-        // dy = 997 / 109.97
-        // dy = 9.06
     }
 
     /**
-     * @notice Calculates the amount of tokens that must enter the pair from the desired amount leaving the pair.
-     * @param amountOut The desired amount of the token leaving the pair.
-     * @param reserveIn The reserve of the token entering the pair.
-     * @param reserveOut The reserve of the token leaving the pair.
-     * @return amountIn The amount of tokens that must enter the pair for the desired amount leaving the pair.
+     *
+     * @param amountIn The amount of input tokens.
+     * @param amountOutMin The users minimum acceptable amount of tokens received from the amountIn.
+     * @param path The sequence of token hops to get from the token of amountIn to the token of amountOut. This is determined off-chain.
+     * @param to The recipient of the token swap.
+     * @param deadline The duration of time the user is willing to wait for a token swap.
      */
-    function _getAmountIn(uint256 amountOut, uint256 reserveIn, uint256 reserveOut)
-        internal
-        pure
-        returns (
-            // moreThanZero(amountOut)
-            uint256 amountIn
-        )
-    {
-        if (reserveIn == 0 || reserveOut == 0) {
-            revert GTRouter__InsufficientpairLiquidity();
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external ensure(deadline) returns (uint256[] memory amounts) {
+        // For the amountIn, get each amount out for each token in the path.
+        amounts = getAmountsOut(amountIn, path);
+        // Revert if the amountsOut is less than the acceptable amount for the user.
+        if (amounts[amounts.length - 1] < amountOutMin) {
+            revert GTRouter__InsufficientAmountOut();
         }
-        // Use the same scenario: amountOut = 9, reserveIn = 100, reserveOut = 100
+        // If the amountsOut is above the minimum accepted by the user, initiate the swap by transferring tokens to pool.
+        IERC20(path[0]).safeTransferFrom(msg.sender, GTLibrary.pairFor(factory, path[0], path[1]), amountIn);
+        _swap(amounts, path, to);
+    }
 
-        // numerator = 100 * 9 * 1000 = 900,000
-        uint256 numerator = reserveIn * amountOut * FEE_PRECISION;
-        // denominator = (100 - 9) * 997 = 90,727
-        uint256 denominator = (reserveOut - amountOut) * (FEE_PRECISION - FEE);
-        // amoountIn = (900,000 + 90,727 - 1) / 90,727 = 10.91, rounded down to 10. 10 tokens in for 9 tokens out.
-        amountIn = (numerator + denominator - 1) / denominator;
+    /*//////////////////////////////////////////////////////////////
+                           LIBRARY FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function getAmountIn(uint256 amountOut, uint256 reserveIn, uint256 reserveOut)
+        public
+        pure
+        returns (uint256 amountIn)
+    {
+        return (GTLibrary.getAmountIn(amountOut, reserveIn, reserveOut));
+    }
+
+    function getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
+        public
+        pure
+        returns (uint256 amountOut)
+    {
+        return (GTLibrary.getAmountOut(amountIn, reserveIn, reserveOut));
+    }
+
+    function getAmountsIn(uint256 amountsOut, address[] calldata path) public view returns (uint256[] memory amounts) {
+        return (GTLibrary.getAmountsIn(factory, amountsOut, path));
+    }
+
+    function getAmountsOut(uint256 amountsIn, address[] calldata path) public view returns (uint256[] memory amounts) {
+        return (GTLibrary.getAmountsOut(factory, amountsIn, path));
     }
 }

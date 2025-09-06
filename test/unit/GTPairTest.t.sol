@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.27;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 import {GTFactory} from "../../src/GTFactory.sol";
 import {GTPair} from "../../src/GTPair.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IGTPair} from "../../src/interfaces/IGTPair.sol";
+import {GTRouter} from "../../src/GTRouter.sol";
 
-contract GTpairTest is Test {
+contract GTPairTest is Test {
     address pair;
     GTFactory factory;
+    GTRouter router;
     ERC20Mock weth;
     ERC20Mock usdc;
-    address feeAddress;
+    address feeAddress = makeAddr("feeAddress");
     address firstLiquidityProvider = makeAddr("firstLiquidityProvider");
     address secondLiquidityProvider = makeAddr("secondLiquidityProvider");
     address thirdLiquidityProvider = makeAddr("thirdLiquidityProvider");
@@ -22,8 +24,13 @@ contract GTpairTest is Test {
     uint256 public constant FIRST_DEPOSIT_WETH_AMOUNT = 10 ether; // 10 WETH (18 decimals)
     uint256 public constant FIRST_DEPOSIT_USDC_AMOUNT = 20_000 ether; // 20,000 USDC (18 decimals)
     // Price of ETH is $2000. 20,000 / 10 = 2,000
+    uint256 public constant FIRST_MIN_ACCEPTED_WETH_DEPOSIT = 9 ether;
+    uint256 public constant FIRST_MIN_ACCEPTED_USDC_DEPOSIT = 18_000 ether;
+
     uint256 public constant DEPOSIT_WETH_AMOUNT = 5 ether;
     uint256 public constant DEPOSIT_USDC_AMOUNT = 10_000 ether;
+    uint256 public constant MIN_ACCEPTED_WETH_DEPOSIT = 4 ether;
+    uint256 public constant MIN_ACCEPTED_USDC_DEPOSIT = 8_000 ether;
 
     uint256 public constant BURN_LP_AMOUNT = 1 ether;
 
@@ -33,12 +40,15 @@ contract GTpairTest is Test {
     uint256 public constant PRECISION = 1e18;
     uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3;
 
+    uint256 public deadline = block.timestamp + 10 minutes;
+
     function setUp() public {
         weth = new ERC20Mock();
         usdc = new ERC20Mock();
-        vm.startPrank(address(factory));
+        factory = new GTFactory(feeAddress, feeAddress);
+        router = new GTRouter(address(factory));
+        vm.prank(address(factory));
         pair = factory.createPair(address(weth), address(usdc));
-        vm.stopPrank();
 
         weth.mint(address(firstLiquidityProvider), FIRST_DEPOSIT_WETH_AMOUNT);
         usdc.mint(address(firstLiquidityProvider), FIRST_DEPOSIT_USDC_AMOUNT);
@@ -48,6 +58,24 @@ contract GTpairTest is Test {
 
         weth.mint(address(thirdLiquidityProvider), DEPOSIT_WETH_AMOUNT);
         usdc.mint(address(thirdLiquidityProvider), DEPOSIT_USDC_AMOUNT);
+
+        vm.startPrank(firstLiquidityProvider);
+        weth.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        IERC20(pair).approve(address(router), type(uint256).max);
+        vm.stopPrank();
+
+        vm.startPrank(secondLiquidityProvider);
+        weth.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        IERC20(pair).approve(address(router), type(uint256).max);
+        vm.stopPrank();
+
+        vm.startPrank(thirdLiquidityProvider);
+        weth.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        IERC20(pair).approve(address(router), type(uint256).max);
+        vm.stopPrank();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -56,30 +84,58 @@ contract GTpairTest is Test {
 
     modifier onlyFirstDepositLiquidityAndMintLP() {
         vm.startPrank(firstLiquidityProvider);
-        IERC20(weth).transfer(address(pair), FIRST_DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), FIRST_DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(firstLiquidityProvider);
+        router.addLiquidity(
+            address(weth),
+            address(usdc),
+            FIRST_DEPOSIT_WETH_AMOUNT,
+            FIRST_DEPOSIT_USDC_AMOUNT,
+            FIRST_MIN_ACCEPTED_WETH_DEPOSIT,
+            FIRST_MIN_ACCEPTED_USDC_DEPOSIT,
+            firstLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
         _;
     }
 
     modifier allDepositLiquidityAndMintLP() {
         vm.startPrank(firstLiquidityProvider);
-        IERC20(weth).transfer(address(pair), FIRST_DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), FIRST_DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(firstLiquidityProvider);
+        router.addLiquidity(
+            address(weth),
+            address(usdc),
+            FIRST_DEPOSIT_WETH_AMOUNT,
+            FIRST_DEPOSIT_USDC_AMOUNT,
+            FIRST_MIN_ACCEPTED_WETH_DEPOSIT,
+            FIRST_MIN_ACCEPTED_USDC_DEPOSIT,
+            firstLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
         vm.startPrank(secondLiquidityProvider);
-        IERC20(weth).transfer(address(pair), DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(secondLiquidityProvider);
+        router.addLiquidity(
+            address(weth),
+            address(usdc),
+            DEPOSIT_WETH_AMOUNT,
+            DEPOSIT_USDC_AMOUNT,
+            MIN_ACCEPTED_WETH_DEPOSIT,
+            MIN_ACCEPTED_USDC_DEPOSIT,
+            secondLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
         vm.startPrank(thirdLiquidityProvider);
-        IERC20(weth).transfer(address(pair), DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(thirdLiquidityProvider);
+        router.addLiquidity(
+            address(weth),
+            address(usdc),
+            DEPOSIT_WETH_AMOUNT,
+            DEPOSIT_USDC_AMOUNT,
+            MIN_ACCEPTED_WETH_DEPOSIT,
+            MIN_ACCEPTED_USDC_DEPOSIT,
+            thirdLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
         _;
     }
@@ -95,16 +151,14 @@ contract GTpairTest is Test {
         assertEq(blockTimestampLast, 0);
     }
 
-    function test_ReserveAfterFirstLiquidityDeposit() public {
-        vm.startPrank(firstLiquidityProvider);
-        IERC20(weth).transfer(address(pair), FIRST_DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), FIRST_DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(firstLiquidityProvider);
-        vm.stopPrank();
-
+    function test_ReserveAfterFirstLiquidityDeposit() public onlyFirstDepositLiquidityAndMintLP {
         (uint112 reserve0, uint112 reserve1, uint32 blockTimeStampLast) = IGTPair(pair).getReserves();
-        assertEq(reserve0, FIRST_DEPOSIT_WETH_AMOUNT);
-        assertEq(reserve1, FIRST_DEPOSIT_USDC_AMOUNT);
+        if (weth < usdc) {
+            assertEq(reserve0, FIRST_DEPOSIT_WETH_AMOUNT);
+            assertEq(reserve1, FIRST_DEPOSIT_USDC_AMOUNT);
+        }
+        assertEq(reserve0, FIRST_DEPOSIT_USDC_AMOUNT);
+        assertEq(reserve1, FIRST_DEPOSIT_WETH_AMOUNT);
         assertEq(blockTimeStampLast, block.timestamp);
     }
 
@@ -118,9 +172,16 @@ contract GTpairTest is Test {
         assertEq(IGTPair(pair).totalSupply(), 0);
 
         vm.startPrank(firstLiquidityProvider);
-        IERC20(weth).transfer(address(pair), FIRST_DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), FIRST_DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(firstLiquidityProvider);
+        router.addLiquidity(
+            address(weth),
+            address(usdc),
+            FIRST_DEPOSIT_WETH_AMOUNT,
+            FIRST_DEPOSIT_USDC_AMOUNT,
+            FIRST_MIN_ACCEPTED_WETH_DEPOSIT,
+            FIRST_MIN_ACCEPTED_USDC_DEPOSIT,
+            firstLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
         uint256 expectedLiquidityTokens =
@@ -131,44 +192,52 @@ contract GTpairTest is Test {
         assertEq(IGTPair(pair).totalSupply(), actualLiquidityTokens + MINIMUM_LIQUIDITY);
     }
 
-    function test_NumerousLiquidityDeposits() public {
-        vm.startPrank(firstLiquidityProvider);
-        IERC20(weth).transfer(address(pair), FIRST_DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), FIRST_DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(firstLiquidityProvider);
-        vm.stopPrank();
-
+    function test_NumerousLiquidityDeposits() public onlyFirstDepositLiquidityAndMintLP {
         vm.startPrank(secondLiquidityProvider);
-        IERC20(weth).transfer(address(pair), DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(secondLiquidityProvider);
+        router.addLiquidity(
+            address(weth),
+            address(usdc),
+            DEPOSIT_WETH_AMOUNT,
+            DEPOSIT_USDC_AMOUNT,
+            MIN_ACCEPTED_WETH_DEPOSIT,
+            MIN_ACCEPTED_USDC_DEPOSIT,
+            secondLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
         (uint112 reserve0SecondDepositor, uint112 reserve1SecondDepositor,) = IGTPair(pair).getReserves();
         uint256 totalSupplySecondDepositor = IGTPair(pair).totalSupply();
 
         vm.startPrank(thirdLiquidityProvider);
-        IERC20(weth).transfer(address(pair), DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(thirdLiquidityProvider);
+        router.addLiquidity(
+            address(weth),
+            address(usdc),
+            DEPOSIT_WETH_AMOUNT,
+            DEPOSIT_USDC_AMOUNT,
+            MIN_ACCEPTED_WETH_DEPOSIT,
+            MIN_ACCEPTED_USDC_DEPOSIT,
+            thirdLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
         (uint112 reserve0ThirdDepositor, uint112 reserve1ThirdDepositor,) = IGTPair(pair).getReserves();
         uint256 totalSupplyThirdDepositor = IGTPair(pair).totalSupply();
 
         uint256 expectedFirstLiquidityTokens =
-            Math.sqrt(FIRST_DEPOSIT_WETH_AMOUNT * FIRST_DEPOSIT_USDC_AMOUNT) - MINIMUM_LIQUIDITY;
+            Math.sqrt(FIRST_DEPOSIT_USDC_AMOUNT * FIRST_DEPOSIT_WETH_AMOUNT) - MINIMUM_LIQUIDITY;
         uint256 actualFirstLiquidityTokens = IGTPair(pair).balanceOf(address(firstLiquidityProvider));
 
         uint256 expectedSecondLiquidityTokens = Math.min(
-            (DEPOSIT_WETH_AMOUNT * totalSupplySecondDepositor) / reserve0SecondDepositor,
-            (DEPOSIT_USDC_AMOUNT * totalSupplySecondDepositor) / reserve1SecondDepositor
+            (DEPOSIT_USDC_AMOUNT * totalSupplySecondDepositor) / reserve0SecondDepositor,
+            (DEPOSIT_WETH_AMOUNT * totalSupplySecondDepositor) / reserve1SecondDepositor
         );
         uint256 actualSecondLiquidityTokens = IGTPair(pair).balanceOf(secondLiquidityProvider);
 
         uint256 expectedThirdLiquidityTokens = Math.min(
-            (DEPOSIT_WETH_AMOUNT * totalSupplyThirdDepositor) / reserve0ThirdDepositor,
-            (DEPOSIT_USDC_AMOUNT * totalSupplyThirdDepositor) / reserve1ThirdDepositor
+            (DEPOSIT_USDC_AMOUNT * totalSupplyThirdDepositor) / reserve0ThirdDepositor,
+            (DEPOSIT_WETH_AMOUNT * totalSupplyThirdDepositor) / reserve1ThirdDepositor
         );
         uint256 actualThirdLiquidityTokens = IGTPair(pair).balanceOf(thirdLiquidityProvider);
 
@@ -185,13 +254,7 @@ contract GTpairTest is Test {
                                 BURN LP
     //////////////////////////////////////////////////////////////*/
 
-    function test_BurnAllFirstDepositorLPTokensNoYield() public {
-        vm.startPrank(firstLiquidityProvider);
-        IERC20(weth).transfer(address(pair), FIRST_DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), FIRST_DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(firstLiquidityProvider);
-        vm.stopPrank();
-
+    function test_BurnAllFirstDepositorLPTokensNoYield() public onlyFirstDepositLiquidityAndMintLP {
         uint256 wethBalanceBefore = IERC20(weth).balanceOf(firstLiquidityProvider);
         uint256 usdcBalanceBefore = IERC20(usdc).balanceOf(firstLiquidityProvider);
 
@@ -199,8 +262,15 @@ contract GTpairTest is Test {
         assertEq(usdcBalanceBefore, 0);
 
         vm.startPrank(firstLiquidityProvider);
-        IERC20(pair).transfer(address(pair), IGTPair(pair).balanceOf(firstLiquidityProvider));
-        IGTPair(pair).burn(firstLiquidityProvider);
+        router.removeLiquidity(
+            address(weth),
+            address(usdc),
+            IERC20(pair).balanceOf(firstLiquidityProvider),
+            FIRST_MIN_ACCEPTED_WETH_DEPOSIT,
+            FIRST_MIN_ACCEPTED_USDC_DEPOSIT,
+            firstLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
         uint256 wethBalanceAfter = IERC20(weth).balanceOf(firstLiquidityProvider);
@@ -211,16 +281,17 @@ contract GTpairTest is Test {
         assertApproxEqAbs(usdcBalanceAfter, FIRST_DEPOSIT_USDC_AMOUNT, 1e6);
     }
 
-    function test_BurnHalfFirstDepositorLPTokensNoYield() public {
+    function test_BurnHalfFirstDepositorLPTokensNoYield() public onlyFirstDepositLiquidityAndMintLP {
         vm.startPrank(firstLiquidityProvider);
-        IERC20(weth).transfer(address(pair), FIRST_DEPOSIT_WETH_AMOUNT);
-        IERC20(usdc).transfer(address(pair), FIRST_DEPOSIT_USDC_AMOUNT);
-        IGTPair(pair).mint(firstLiquidityProvider);
-        vm.stopPrank();
-
-        vm.startPrank(firstLiquidityProvider);
-        IERC20(pair).transfer(address(pair), (IGTPair(pair).balanceOf(firstLiquidityProvider)) / 2);
-        IGTPair(pair).burn(firstLiquidityProvider);
+        router.removeLiquidity(
+            address(weth),
+            address(usdc),
+            (IERC20(pair).balanceOf(firstLiquidityProvider) / 2),
+            MIN_ACCEPTED_WETH_DEPOSIT,
+            MIN_ACCEPTED_USDC_DEPOSIT,
+            firstLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
         uint256 wethBalanceAfter = IERC20(weth).balanceOf(firstLiquidityProvider);
@@ -232,7 +303,7 @@ contract GTpairTest is Test {
     }
 
     /**
-     * @notice After the reserves have accumulated 10 ether and 20,000 usdc from fees (a lot), these are the expected amounts earned for each depositor.
+     * @notice After the reserves have accumulated 10 ether and 20,000 usdc from fees, these are the expected amounts earned for each depositor.
      *
      * pair balances:
      * WETH = 30 ether
@@ -255,49 +326,52 @@ contract GTpairTest is Test {
         usdc.mint(address(pair), USDC_RESERVE_INCREASE);
 
         vm.startPrank(firstLiquidityProvider);
-        uint256 lpSupplyBeforeBurn = IGTPair(pair).totalSupply();
-        IERC20(pair).transfer(address(pair), IGTPair(pair).balanceOf(firstLiquidityProvider));
-        uint256 firstLiquidity = IGTPair(pair).balanceOf(address(pair));
-        uint256 balance0 = IERC20(weth).balanceOf(address(pair));
-        uint256 balance1 = IERC20(usdc).balanceOf(address(pair));
-        IGTPair(pair).burn(firstLiquidityProvider);
+        router.removeLiquidity(
+            address(weth),
+            address(usdc),
+            IERC20(pair).balanceOf(firstLiquidityProvider),
+            FIRST_MIN_ACCEPTED_WETH_DEPOSIT,
+            FIRST_MIN_ACCEPTED_USDC_DEPOSIT,
+            firstLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
-        uint256 expectedWethReturn = (firstLiquidity * balance0) / lpSupplyBeforeBurn;
-        uint256 expectedUsdcReturn = (firstLiquidity * balance1) / lpSupplyBeforeBurn;
-
-        assertApproxEqAbs(expectedWethReturn, IERC20(weth).balanceOf(firstLiquidityProvider), 1e6);
-        assertApproxEqAbs(expectedUsdcReturn, IERC20(usdc).balanceOf(firstLiquidityProvider), 1e6);
+        // Due to mint of ghost shares, the amount back will not be the amount entered.
+        assertApproxEqAbs(15 ether, IERC20(weth).balanceOf(firstLiquidityProvider), 1e6);
+        console2.log(IERC20(weth).balanceOf(firstLiquidityProvider));
+        assertApproxEqAbs(30_000 ether, IERC20(usdc).balanceOf(firstLiquidityProvider), 1e6);
 
         vm.startPrank(secondLiquidityProvider);
-        lpSupplyBeforeBurn = IGTPair(pair).totalSupply();
-        IERC20(pair).transfer(address(pair), IGTPair(pair).balanceOf(secondLiquidityProvider));
-        uint256 secondLiquidity = IGTPair(pair).balanceOf(address(pair));
-        balance0 = IERC20(weth).balanceOf(address(pair));
-        balance1 = IERC20(usdc).balanceOf(address(pair));
-        IGTPair(pair).burn(secondLiquidityProvider);
+        router.removeLiquidity(
+            address(weth),
+            address(usdc),
+            IERC20(pair).balanceOf(secondLiquidityProvider),
+            MIN_ACCEPTED_WETH_DEPOSIT,
+            MIN_ACCEPTED_USDC_DEPOSIT,
+            secondLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
-        expectedWethReturn = (secondLiquidity * balance0) / lpSupplyBeforeBurn;
-        expectedUsdcReturn = (secondLiquidity * balance1) / lpSupplyBeforeBurn;
-
-        assertEq(expectedWethReturn, IERC20(weth).balanceOf(secondLiquidityProvider));
-        assertEq(expectedUsdcReturn, IERC20(usdc).balanceOf(secondLiquidityProvider));
+        assertApproxEqAbs(7.5 ether, IERC20(weth).balanceOf(secondLiquidityProvider), 100);
+        assertApproxEqAbs(15_000 ether, IERC20(usdc).balanceOf(secondLiquidityProvider), 100);
 
         vm.startPrank(thirdLiquidityProvider);
-        lpSupplyBeforeBurn = IGTPair(pair).totalSupply();
-        IERC20(pair).transfer(address(pair), IGTPair(pair).balanceOf(thirdLiquidityProvider));
-        uint256 thirdLiquidity = IGTPair(pair).balanceOf(address(pair));
-        balance0 = IERC20(weth).balanceOf(address(pair));
-        balance1 = IERC20(usdc).balanceOf(address(pair));
-        IGTPair(pair).burn(thirdLiquidityProvider);
+        router.removeLiquidity(
+            address(weth),
+            address(usdc),
+            IERC20(pair).balanceOf(thirdLiquidityProvider),
+            MIN_ACCEPTED_WETH_DEPOSIT,
+            MIN_ACCEPTED_USDC_DEPOSIT,
+            thirdLiquidityProvider,
+            deadline
+        );
         vm.stopPrank();
 
-        expectedWethReturn = (thirdLiquidity * balance0) / lpSupplyBeforeBurn;
-        expectedUsdcReturn = (thirdLiquidity * balance1) / lpSupplyBeforeBurn;
-
-        assertEq(expectedWethReturn, IERC20(weth).balanceOf(thirdLiquidityProvider));
-        assertEq(expectedUsdcReturn, IERC20(usdc).balanceOf(thirdLiquidityProvider));
+        // Due to Solidity division always rounding down, minting LP tokens can leave a few wei unaccounted for, meaning a small amount of dust will remain in the pool, and LP's won't get back the exact full amount provided.
+        assertApproxEqAbs(7.5 ether, IERC20(weth).balanceOf(thirdLiquidityProvider), 100);
+        assertApproxEqAbs(15_000 ether, IERC20(usdc).balanceOf(thirdLiquidityProvider), 100);
     }
 
     /*//////////////////////////////////////////////////////////////

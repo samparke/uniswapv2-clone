@@ -4,6 +4,7 @@ pragma solidity 0.8.27;
 import {Test, console} from "forge-std/Test.sol";
 import {GTFactory} from "../../src/GTFactory.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {GTLibrary} from "../../src/libraries/GTLibrary.sol";
 
 contract GTFactoryTest is Test {
     GTFactory factory;
@@ -46,11 +47,20 @@ contract GTFactoryTest is Test {
 
     function test_RevertIf_TokensAreTheSame() public {
         vm.expectRevert(GTFactory.GTFactory__TokensCannotBeTheSame.selector);
-        factory.createPool(address(weth), address(weth));
+        factory.createPair(address(weth), address(weth));
     }
 
     function test_RevertIf_TokensAreAddressZero() public {
         vm.expectRevert(GTFactory.GTFactory__TokensZeroAddress.selector);
-        factory.createPool(address(0), address(weth));
+        factory.createPair(address(0), address(weth));
+    }
+
+    function test_createPoolAndMatchesExpectedAddress() public {
+        factory.createPair(address(weth), address(usdc));
+
+        address expectedPair = GTLibrary.pairFor(address(factory), address(weth), address(usdc));
+        address pair = factory.allPairs(0);
+
+        assertEq(expectedPair, pair);
     }
 }

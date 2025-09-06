@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.27;
 
-import {GTPool} from "../src/GTPool.sol";
+import {GTPair} from "../src/GTPair.sol";
 import {IGTFactory} from "./interfaces/IGTFactory.sol";
 
 contract GTFactory is IGTFactory {
@@ -16,7 +16,7 @@ contract GTFactory is IGTFactory {
     mapping(address => mapping(address => address)) public getPair; // From the pair address, get the tokens in the pair
     address[] public allPairs; // All token pairs created
 
-    event PoolCreated(address indexed tokenA, address indexed tokenB, address pair);
+    event PairCreated(address indexed tokenA, address indexed tokenB, address pair, uint256 pairsLength);
 
     modifier onlyFeeSetter() {
         if (msg.sender != feeSetter) {
@@ -35,20 +35,30 @@ contract GTFactory is IGTFactory {
      * @param tokenA The first token in the pair.
      * @param tokenB The second tokens in the pair.
      */
-    function createPool(address tokenA, address tokenB) external {
+    function createPair(address tokenA, address tokenB) external returns (address pair) {
         if (tokenA == tokenB) {
             revert GTFactory__TokensCannotBeTheSame();
         }
-        if (tokenA == address(0) || tokenB == address(0)) {
+
+        // Canonical ordering to avoid the creation of two seperate pools for the same pair.
+        (address token0, address token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
+        // As token0 is the smaller address between tokenA and tokenB, checking token0 covers both cases.
+        if (token0 == address(0)) {
             revert GTFactory__TokensZeroAddress();
         }
-        GTPool newPair = new GTPool(tokenA, tokenB, address(this));
+        if (getPair[token0][token1] != address(0)) {
+            revert GTFactory__PairAlreadyExists();
+        }
+
+        bytes32 salt = keccak256(abi.encodePacked(token0, token1));
+        GTPair newPair = new GTPair{salt: salt}();
+        pair = address(newPair);
 
         // We create two mappings, each with the different orders so that it does not matter which order token a user inputs
-        getPair[tokenA][tokenB] = address(newPair);
-        getPair[tokenB][tokenA] = address(newPair);
-        allPairs.push(address(newPair));
-        emit PoolCreated(tokenA, tokenB, address(newPair));
+        getPair[tokenA][tokenB] = pair;
+        getPair[tokenB][tokenA] = pair;
+        allPairs.push(address(pair));
+        emit PairCreated(tokenA, tokenB, address(pair), allPairs.length);
     }
 
     /**

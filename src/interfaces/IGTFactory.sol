@@ -10,7 +10,7 @@ interface IGTFactory {
 
     function allPairs(uint256) external view returns (address);
 
-    function createPool(address tokenA, address tokenB) external;
+    function createPair(address tokenA, address tokenB) external returns (address);
 
     function setFeeAddress(address newFeeAddress) external;
 

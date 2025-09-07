@@ -82,7 +82,7 @@ library GTLibrary {
      * @return amountB The amount of tokenB equivalent to amountA at the current ratio.
      */
     function quote(uint256 amountA, uint256 reserveA, uint256 reserveB) internal pure returns (uint256 amountB) {
-        if (amountA < 0) {
+        if (amountA == 0) {
             revert GTLibrary__InsufficientAmount();
         }
         if (reserveA == 0 || reserveB == 0) {
@@ -97,7 +97,7 @@ library GTLibrary {
      * @dev This function does not provide the optimal paths. It simply, given a path (which would have been constructed off-chain),
      * calculates the amount out for the subsequent token in the path, based on the first token input.
      * @param factory The factory address
-     * @param amountIn The amount of the first token in the sequence being input.
+     * @param amountIn The amount of the first token in the sequence.
      * @param path The sequence of tokens in the pairs. For example, path[0] = WETH, path[1] = USDC and path[2] = DAI.
      */
     function getAmountsOut(address factory, uint256 amountIn, address[] memory path)

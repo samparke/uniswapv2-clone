@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.27;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {GTFactory} from "../../src/GTFactory.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {GTLibrary} from "../../src/libraries/GTLibrary.sol";
@@ -31,6 +31,18 @@ contract GTFactoryTest is Test {
         assertEq(factory.feeSetter(), feeSetter);
     }
 
+    function test_SetNewFeeSetter() public {
+        vm.prank(feeSetter);
+        factory.setFeeSetter(address(1));
+        assertEq(factory.feeSetter(), address(1));
+    }
+
+    function test_SetFeeAddress() public {
+        vm.prank(feeSetter);
+        factory.setFeeAddress(address(1));
+        assertEq(factory.feeAddress(), address(1));
+    }
+
     function test_RevertIf_NotFeeSetterChangingFeeAddress() public {
         vm.expectRevert(GTFactory.GTFactory__NotFeeSetter.selector);
         factory.setFeeAddress(address(this));
@@ -55,6 +67,12 @@ contract GTFactoryTest is Test {
         factory.createPair(address(0), address(weth));
     }
 
+    function test_RevertPairAlreadyExists() public {
+        factory.createPair(address(weth), address(usdc));
+        vm.expectRevert(GTFactory.GTFactory__PairAlreadyExists.selector);
+        factory.createPair(address(usdc), address(weth));
+    }
+
     function test_createPoolAndMatchesExpectedAddress() public {
         factory.createPair(address(weth), address(usdc));
 
@@ -62,5 +80,17 @@ contract GTFactoryTest is Test {
         address pair = factory.allPairs(0);
 
         assertEq(expectedPair, pair);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                GET PAIR
+    //////////////////////////////////////////////////////////////*/
+
+    function test_getPairAddress() public {
+        factory.createPair(address(weth), address(usdc));
+        address pairAddress = factory.getPair(address(weth), address(usdc));
+        address expectedPairAddress = GTLibrary.pairFor(address(factory), address(weth), address(usdc));
+
+        assertEq(pairAddress, expectedPairAddress);
     }
 }

@@ -15,4 +15,6 @@ interface IGTPair {
     function getReserves() external view returns (uint112, uint112, uint32);
 
     function initialise(address token0, address token1) external;
+
+    function getTokens() external view returns (address, address);
 }

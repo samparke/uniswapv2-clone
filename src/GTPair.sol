@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.27;
 
-import {GTFactory} from "./GTFactory.sol";
-import {IGTFactory} from "../src/interfaces/IGTFactory.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {LP} from "./LP.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -15,10 +12,8 @@ contract GTPair is LP, ReentrancyGuard {
 
     error GTPair__InsufficientOutputAmount();
     error GTPair__InsufficientPoolLiquidity();
-    error GTPair__ZeroAddressError();
     error GTPair__CannotOutputTwoTokens();
     error GTPair__CannotBeZeroAddress();
-    error GTPair__MoreThanZero();
     error GTPair__TokensCannotBeTheSame();
     error GTPair__SlippageTooHigh();
     error GTPair__DeadlinePassed();
@@ -55,20 +50,6 @@ contract GTPair is LP, ReentrancyGuard {
     );
     event Mint(address indexed sender, uint256 amount0, uint256 amount1);
     event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
-
-    modifier zeroAddress(address inputAddress) {
-        if (inputAddress == address(0)) {
-            revert GTPair__CannotBeZeroAddress();
-        }
-        _;
-    }
-
-    modifier moreThanZero(uint256 amount) override {
-        if (amount == 0) {
-            revert GTPair__MoreThanZero();
-        }
-        _;
-    }
 
     constructor() {
         i_factory = msg.sender;
@@ -240,5 +221,9 @@ contract GTPair is LP, ReentrancyGuard {
         s_reserve1 = uint112(balance1);
         s_blockTimestampLast = uint32(block.timestamp);
         emit Sync(s_reserve0, s_reserve1);
+    }
+
+    function getTokens() external view returns (address, address) {
+        return (s_token0, s_token1);
     }
 }

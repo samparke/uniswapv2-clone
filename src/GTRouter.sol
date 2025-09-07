@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.27;
 
-import {GTPair} from "./GTPair.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IGTFactory} from "./interfaces/IGTFactory.sol";
 import {GTLibrary} from "../src/libraries/GTLibrary.sol";
 import {IGTPair} from "./interfaces/IGTPair.sol";
 import {console2} from "forge-std/Test.sol";
+import {IGTRouter} from "./interfaces/IGTRouter.sol";
 
-contract GTRouter {
+contract GTRouter is IGTRouter {
     using SafeERC20 for IERC20;
 
     error GTRouter__DeadlinePassed();
@@ -19,8 +19,9 @@ contract GTRouter {
     error GTRouter__InsufficientBAmount();
     error GTRouter__InsufficientAAmount();
     error GTRouter__InsufficientAmountOut();
+    error GTRouter__ExcessiveInputAmount();
 
-    address public immutable factory;
+    address public immutable override i_factory;
 
     uint256 public constant FEE = 3; // 0.3%
     uint256 public constant FEE_PRECISION = 1000;
@@ -32,8 +33,8 @@ contract GTRouter {
         _;
     }
 
-    constructor(address _factory) {
-        factory = _factory;
+    constructor(address factory) {
+        i_factory = factory;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -60,10 +61,10 @@ contract GTRouter {
         uint256 amountBMin
     ) internal virtual returns (uint256 amountA, uint256 amountB) {
         // If the pair doesn't exist, create it
-        if (IGTFactory(factory).getPair(tokenA, tokenB) == address(0)) {
-            IGTFactory(factory).createPair(tokenA, tokenB);
+        if (IGTFactory(i_factory).getPair(tokenA, tokenB) == address(0)) {
+            IGTFactory(i_factory).createPair(tokenA, tokenB);
         }
-        (uint256 reserveA, uint256 reserveB) = GTLibrary.getReserves(factory, tokenA, tokenB);
+        (uint256 reserveA, uint256 reserveB) = GTLibrary.getReserves(i_factory, tokenA, tokenB);
 
         // If there are currently no reserves, amountA and amountB are the desired amounts by the user, meaning amountADesired and amountBDesired will be the amount deposited.
         if (reserveA == 0 && reserveB == 0) {
@@ -83,6 +84,9 @@ contract GTRouter {
                 uint256 amountAOptimal = GTLibrary.quote(amountBDesired, reserveB, reserveA);
                 // The amount of token A the user wants to deposit must be greater or equal to the required amount.
                 assert(amountAOptimal <= amountADesired);
+                console2.log("amountAMin", amountAMin);
+                console2.log("amountAOptimal", amountAOptimal);
+                console2.log("amountADesired", amountADesired);
                 // If it does, but its less than the minimum acceptable amount from the user, revert.
                 if (amountAMin > amountAOptimal) {
                     revert GTRouter__InsufficientAAmount();
@@ -115,9 +119,9 @@ contract GTRouter {
         uint256 amountBMin,
         address to,
         uint256 deadline
-    ) external ensure(deadline) returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
+    ) external virtual override ensure(deadline) returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
         (amountA, amountB) = _addLiquidity(tokenA, tokenB, amountADesired, amountBDesired, amountAMin, amountBMin);
-        address pair = GTLibrary.pairFor(factory, tokenA, tokenB);
+        address pair = GTLibrary.pairFor(i_factory, tokenA, tokenB);
         IERC20(tokenA).safeTransferFrom(msg.sender, pair, amountA);
         IERC20(tokenB).safeTransferFrom(msg.sender, pair, amountB);
         liquidity = IGTPair(pair).mint(to);
@@ -147,8 +151,8 @@ contract GTRouter {
         uint256 amountBMin,
         address to,
         uint256 deadline
-    ) public ensure(deadline) returns (uint256 amountA, uint256 amountB) {
-        address pair = GTLibrary.pairFor(factory, tokenA, tokenB);
+    ) public virtual override ensure(deadline) returns (uint256 amountA, uint256 amountB) {
+        address pair = GTLibrary.pairFor(i_factory, tokenA, tokenB);
         // Transfers LP tokens to pair address.
         IERC20(pair).safeTransferFrom(msg.sender, address(pair), liquidity);
         (uint256 amount0, uint256 amount1) = IGTPair(pair).burn(to);
@@ -168,7 +172,7 @@ contract GTRouter {
      * @param path The sequence of token hops.
      * @param _to The recipient of the token swap.
      */
-    function _swap(uint256[] memory amounts, address[] memory path, address _to) internal {
+    function _swap(uint256[] memory amounts, address[] memory path, address _to) internal virtual {
         for (uint256 i; i < path.length - 1; i++) {
             (address input, address output) = (path[i], path[i + 1]);
             (address token0,) = GTLibrary.sortTokens(input, output);
@@ -178,8 +182,8 @@ contract GTRouter {
                 input == token0 ? (uint256(0), amountOut) : (amountOut, uint256(0));
             // If the current hop is not the second to last in the path, send tokens to the next pool in the sequence.
             // If it is, we want to send the output tokens to the user who was to 'to' address in the swap initiation.
-            address to = i < path.length - 2 ? GTLibrary.pairFor(factory, output, path[i + 2]) : _to;
-            IGTPair(GTLibrary.pairFor(factory, input, output)).swap(amount0Out, amount1Out, to);
+            address to = i < path.length - 2 ? GTLibrary.pairFor(i_factory, output, path[i + 2]) : _to;
+            IGTPair(GTLibrary.pairFor(i_factory, input, output)).swap(amount0Out, amount1Out, to);
         }
     }
 
@@ -197,7 +201,7 @@ contract GTRouter {
         address[] calldata path,
         address to,
         uint256 deadline
-    ) external ensure(deadline) returns (uint256[] memory amounts) {
+    ) external virtual override ensure(deadline) returns (uint256[] memory amounts) {
         // For the amountIn, get each amount out for each token in the path.
         amounts = getAmountsOut(amountIn, path);
         // Revert if the amountsOut is less than the acceptable amount for the user.
@@ -205,7 +209,22 @@ contract GTRouter {
             revert GTRouter__InsufficientAmountOut();
         }
         // If the amountsOut is above the minimum accepted by the user, initiate the swap by transferring tokens to pool.
-        IERC20(path[0]).safeTransferFrom(msg.sender, GTLibrary.pairFor(factory, path[0], path[1]), amountIn);
+        IERC20(path[0]).safeTransferFrom(msg.sender, GTLibrary.pairFor(i_factory, path[0], path[1]), amountIn);
+        _swap(amounts, path, to);
+    }
+
+    function swapTokensForExactTokens(
+        uint256 amountOut,
+        uint256 amountInMax,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external virtual override ensure(deadline) returns (uint256[] memory amounts) {
+        amounts = getAmountsIn(amountOut, path);
+        if (amounts[0] > amountInMax) {
+            revert GTRouter__ExcessiveInputAmount();
+        }
+        IERC20(path[0]).safeTransferFrom(msg.sender, GTLibrary.pairFor(i_factory, path[0], path[1]), amounts[0]);
         _swap(amounts, path, to);
     }
 
@@ -216,6 +235,8 @@ contract GTRouter {
     function getAmountIn(uint256 amountOut, uint256 reserveIn, uint256 reserveOut)
         public
         pure
+        virtual
+        override
         returns (uint256 amountIn)
     {
         return (GTLibrary.getAmountIn(amountOut, reserveIn, reserveOut));
@@ -224,16 +245,40 @@ contract GTRouter {
     function getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
         public
         pure
+        virtual
+        override
         returns (uint256 amountOut)
     {
         return (GTLibrary.getAmountOut(amountIn, reserveIn, reserveOut));
     }
 
-    function getAmountsIn(uint256 amountsOut, address[] calldata path) public view returns (uint256[] memory amounts) {
-        return (GTLibrary.getAmountsIn(factory, amountsOut, path));
+    function getAmountsIn(uint256 amountsOut, address[] calldata path)
+        public
+        view
+        virtual
+        override
+        returns (uint256[] memory amounts)
+    {
+        return (GTLibrary.getAmountsIn(i_factory, amountsOut, path));
     }
 
-    function getAmountsOut(uint256 amountsIn, address[] calldata path) public view returns (uint256[] memory amounts) {
-        return (GTLibrary.getAmountsOut(factory, amountsIn, path));
+    function getAmountsOut(uint256 amountsIn, address[] calldata path)
+        public
+        view
+        virtual
+        override
+        returns (uint256[] memory amounts)
+    {
+        return (GTLibrary.getAmountsOut(i_factory, amountsIn, path));
+    }
+
+    function quote(uint256 amountA, uint256 reserveA, uint256 reserveB)
+        public
+        pure
+        virtual
+        override
+        returns (uint256 amountB)
+    {
+        return (GTLibrary.quote(amountA, reserveA, reserveB));
     }
 }

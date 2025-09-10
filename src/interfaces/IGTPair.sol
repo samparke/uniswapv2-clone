@@ -17,4 +17,8 @@ interface IGTPair {
     function initialise(address token0, address token1) external;
 
     function getTokens() external view returns (address, address);
+
+    function sync() external;
+
+    function skim(address to) external;
 }

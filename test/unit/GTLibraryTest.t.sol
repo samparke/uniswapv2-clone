@@ -35,7 +35,7 @@ contract GTLibraryTest is Test {
         weth = new ERC20Mock();
         usdc = new ERC20Mock();
         factory = new GTFactory(feeAddress, feeAddress);
-        router = new GTRouter(address(factory));
+        router = new GTRouter(address(factory), address(weth));
         vm.prank(address(factory));
         pair = factory.createPair(address(weth), address(usdc));
 

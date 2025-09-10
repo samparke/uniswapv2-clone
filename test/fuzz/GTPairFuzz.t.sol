@@ -9,12 +9,13 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IGTPair} from "../../src/interfaces/IGTPair.sol";
 import {GTRouter} from "../../src/GTRouter.sol";
 import {GTLibrary} from "../../src/libraries/GTLibrary.sol";
+import {WETH} from "../mocks/WETH.sol";
 
 contract GTPairTest is Test {
     address pair;
     GTFactory factory;
     GTRouter router;
-    ERC20Mock weth;
+    WETH weth;
     ERC20Mock usdc;
     address feeAddress = makeAddr("feeAddress");
     address firstLiquidityProvider = makeAddr("firstLiquidityProvider");
@@ -32,10 +33,10 @@ contract GTPairTest is Test {
     uint256 public deadline = block.timestamp + 10 minutes;
 
     function setUp() public {
-        weth = new ERC20Mock();
+        weth = new WETH();
         usdc = new ERC20Mock();
-        factory = new GTFactory(feeAddress, feeAddress);
-        router = new GTRouter(address(factory));
+        factory = new GTFactory(address(0), feeAddress);
+        router = new GTRouter(address(factory), address(weth));
         vm.prank(address(factory));
         pair = factory.createPair(address(weth), address(usdc));
 
@@ -95,7 +96,7 @@ contract GTPairTest is Test {
         );
         vm.stopPrank();
         (uint112 reserve0, uint112 reserve1, uint32 blockTimeStampLast) = IGTPair(pair).getReserves();
-        if (weth < usdc) {
+        if (address(weth) < address(usdc)) {
             assertEq(reserve0, wethAmount);
             assertEq(reserve1, usdcAmount);
         }

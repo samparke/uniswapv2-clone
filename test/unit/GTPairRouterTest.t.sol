@@ -4,6 +4,7 @@ pragma solidity 0.8.27;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {GTFactory} from "../../src/GTFactory.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {WETH} from "../../test/mocks/WETH.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IGTPair} from "../../src/interfaces/IGTPair.sol";
@@ -14,9 +15,8 @@ contract GTPairRouterTest is Test {
     address wethUsdcPair;
     address usdcDaiPair;
     GTFactory factory;
-    GTRouter wethUsdRouter;
-    GTRouter usdcDaiRouter;
-    ERC20Mock weth;
+    GTRouter router;
+    WETH weth;
     ERC20Mock usdc;
     ERC20Mock dai;
     address feeAddress = makeAddr("feeAddress");
@@ -45,7 +45,7 @@ contract GTPairRouterTest is Test {
     uint256 public constant USDC_RESERVE_INCREASE = 20_000 ether;
 
     uint256 public constant SWAPPER_INITIAL_WETH = 1 ether;
-    // uint256 public constant SWAPPER_INITIAL_USDC = 2000 ether;
+    uint256 public constant SWAPPER_INITIAL_USDC = 2000 ether;
 
     uint256 public constant PRECISION = 1e18;
     uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3;
@@ -53,12 +53,11 @@ contract GTPairRouterTest is Test {
     uint256 public deadline = block.timestamp + 10 minutes;
 
     function setUp() public {
-        weth = new ERC20Mock();
+        weth = new WETH();
         usdc = new ERC20Mock();
         dai = new ERC20Mock();
-        factory = new GTFactory(feeAddress, feeAddress);
-        wethUsdRouter = new GTRouter(address(factory));
-        usdcDaiRouter = new GTRouter(address(factory));
+        factory = new GTFactory(address(0), feeAddress);
+        router = new GTRouter(address(factory), address(weth));
         vm.prank(address(factory));
         wethUsdcPair = factory.createPair(address(weth), address(usdc));
         vm.prank(address(factory));
@@ -79,36 +78,37 @@ contract GTPairRouterTest is Test {
 
         dai.mint(address(daiDepositor), DEPOSIT_DAI_AMOUNT);
         usdc.mint(address(daiDepositor), DEPOSIT_DAI_AMOUNT);
+        weth.mint(address(daiDepositor), 1 ether);
 
         vm.startPrank(firstLiquidityProvider);
-        weth.approve(address(wethUsdRouter), type(uint256).max);
-        usdc.approve(address(wethUsdRouter), type(uint256).max);
-        IERC20(wethUsdcPair).approve(address(wethUsdRouter), type(uint256).max);
+        weth.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        IERC20(wethUsdcPair).approve(address(router), type(uint256).max);
         vm.stopPrank();
 
         vm.startPrank(secondLiquidityProvider);
-        weth.approve(address(wethUsdRouter), type(uint256).max);
-        usdc.approve(address(wethUsdRouter), type(uint256).max);
-        IERC20(wethUsdcPair).approve(address(wethUsdRouter), type(uint256).max);
+        weth.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        IERC20(wethUsdcPair).approve(address(router), type(uint256).max);
         vm.stopPrank();
 
         vm.startPrank(thirdLiquidityProvider);
-        weth.approve(address(wethUsdRouter), type(uint256).max);
-        usdc.approve(address(wethUsdRouter), type(uint256).max);
-        IERC20(wethUsdcPair).approve(address(wethUsdRouter), type(uint256).max);
+        weth.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        IERC20(wethUsdcPair).approve(address(router), type(uint256).max);
         vm.stopPrank();
 
         vm.startPrank(swapper);
-        weth.approve(address(wethUsdRouter), type(uint256).max);
-        usdc.approve(address(wethUsdRouter), type(uint256).max);
+        weth.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        dai.approve(address(router), type(uint256).max);
         vm.stopPrank();
 
         vm.startPrank(daiDepositor);
-        dai.approve(address(wethUsdRouter), type(uint256).max);
-        usdc.approve(address(wethUsdRouter), type(uint256).max);
-        dai.approve(address(usdcDaiRouter), type(uint256).max);
-        usdc.approve(address(usdcDaiRouter), type(uint256).max);
-        IERC20(usdcDaiPair).approve(address(usdcDaiRouter), type(uint256).max);
+        dai.approve(address(router), type(uint256).max);
+        usdc.approve(address(router), type(uint256).max);
+        weth.approve(address(router), type(uint256).max);
+        IERC20(usdcDaiPair).approve(address(router), type(uint256).max);
         vm.stopPrank();
     }
 
@@ -118,7 +118,7 @@ contract GTPairRouterTest is Test {
 
     modifier onlyFirstDepositLiquidityAndMintLP() {
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             FIRST_DEPOSIT_WETH_AMOUNT,
@@ -134,7 +134,7 @@ contract GTPairRouterTest is Test {
 
     modifier allDepositLiquidityAndMintLP() {
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             FIRST_DEPOSIT_WETH_AMOUNT,
@@ -147,7 +147,7 @@ contract GTPairRouterTest is Test {
         vm.stopPrank();
 
         vm.startPrank(secondLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             DEPOSIT_WETH_AMOUNT,
@@ -160,7 +160,7 @@ contract GTPairRouterTest is Test {
         vm.stopPrank();
 
         vm.startPrank(thirdLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             DEPOSIT_WETH_AMOUNT,
@@ -194,7 +194,7 @@ contract GTPairRouterTest is Test {
 
     function test_ReserveAfterFirstLiquidityDeposit() public onlyFirstDepositLiquidityAndMintLP {
         (uint112 reserve0, uint112 reserve1, uint32 blockTimeStampLast) = IGTPair(wethUsdcPair).getReserves();
-        if (weth < usdc) {
+        if (address(weth) < address(usdc)) {
             assertEq(reserve0, FIRST_DEPOSIT_WETH_AMOUNT);
             assertEq(reserve1, FIRST_DEPOSIT_USDC_AMOUNT);
         }
@@ -213,7 +213,7 @@ contract GTPairRouterTest is Test {
         assertEq(IGTPair(wethUsdcPair).totalSupply(), 0);
 
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             FIRST_DEPOSIT_WETH_AMOUNT,
@@ -235,7 +235,7 @@ contract GTPairRouterTest is Test {
 
     function test_NumerousLiquidityDeposits() public onlyFirstDepositLiquidityAndMintLP {
         vm.startPrank(secondLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             DEPOSIT_WETH_AMOUNT,
@@ -251,7 +251,7 @@ contract GTPairRouterTest is Test {
         uint256 totalSupplySecondDepositor = IGTPair(wethUsdcPair).totalSupply();
 
         vm.startPrank(thirdLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             DEPOSIT_WETH_AMOUNT,
@@ -291,6 +291,17 @@ contract GTPairRouterTest is Test {
         console.log("Total LP tokens in supply", IGTPair(wethUsdcPair).totalSupply() / PRECISION);
     }
 
+    function test_AddETHLiquidity() public {
+        vm.deal(daiDepositor, 1 ether);
+        vm.prank(daiDepositor);
+
+        router.addLiquidityETH{value: 1 ether}(address(dai), 10 ether, 10 ether, 1 ether, daiDepositor, deadline);
+
+        assertEq(daiDepositor.balance, 0);
+        assertEq(weth.balanceOf(GTLibrary.pairFor(address(factory), address(weth), address(dai))), 1 ether);
+        assertGt(IERC20(GTLibrary.pairFor(address(factory), address(weth), address(dai))).balanceOf(daiDepositor), 0);
+    }
+
     /*//////////////////////////////////////////////////////////////
                                 BURN LP
     //////////////////////////////////////////////////////////////*/
@@ -303,7 +314,7 @@ contract GTPairRouterTest is Test {
         assertEq(usdcBalanceBefore, 0);
 
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.removeLiquidity(
+        router.removeLiquidity(
             address(weth),
             address(usdc),
             IERC20(wethUsdcPair).balanceOf(firstLiquidityProvider),
@@ -324,7 +335,7 @@ contract GTPairRouterTest is Test {
 
     function test_BurnHalfFirstDepositorLPTokensNoYield() public onlyFirstDepositLiquidityAndMintLP {
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.removeLiquidity(
+        router.removeLiquidity(
             address(weth),
             address(usdc),
             (IERC20(wethUsdcPair).balanceOf(firstLiquidityProvider) / 2),
@@ -367,7 +378,7 @@ contract GTPairRouterTest is Test {
         usdc.mint(address(wethUsdcPair), USDC_RESERVE_INCREASE);
 
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.removeLiquidity(
+        router.removeLiquidity(
             address(weth),
             address(usdc),
             IERC20(wethUsdcPair).balanceOf(firstLiquidityProvider),
@@ -384,7 +395,7 @@ contract GTPairRouterTest is Test {
         assertApproxEqAbs(30_000 ether, IERC20(usdc).balanceOf(firstLiquidityProvider), 1e6);
 
         vm.startPrank(secondLiquidityProvider);
-        wethUsdRouter.removeLiquidity(
+        router.removeLiquidity(
             address(weth),
             address(usdc),
             IERC20(wethUsdcPair).balanceOf(secondLiquidityProvider),
@@ -399,7 +410,7 @@ contract GTPairRouterTest is Test {
         assertApproxEqAbs(15_000 ether, IERC20(usdc).balanceOf(secondLiquidityProvider), 100);
 
         vm.startPrank(thirdLiquidityProvider);
-        wethUsdRouter.removeLiquidity(
+        router.removeLiquidity(
             address(weth),
             address(usdc),
             IERC20(wethUsdcPair).balanceOf(thirdLiquidityProvider),
@@ -415,6 +426,31 @@ contract GTPairRouterTest is Test {
         assertApproxEqAbs(15_000 ether, IERC20(usdc).balanceOf(thirdLiquidityProvider), 100);
     }
 
+    function test_removeLiquidityETH() public {
+        vm.deal(daiDepositor, 1 ether);
+        vm.prank(daiDepositor);
+        router.addLiquidityETH{value: 1 ether}(address(dai), 10 ether, 10 ether, 1 ether, daiDepositor, deadline);
+        assertEq(daiDepositor.balance, 0);
+        vm.startPrank(daiDepositor);
+        IERC20(GTLibrary.pairFor(address(factory), address(dai), address(weth))).approve(
+            address(router), type(uint256).max
+        );
+        router.removeLiquidityETH(
+            address(dai),
+            IERC20(GTLibrary.pairFor(address(factory), address(dai), address(weth))).balanceOf(daiDepositor),
+            // Because they were the first liquidity provider, they will not be able to retreive entire intial deposit.
+            10 ether - 1e10,
+            1 ether - 1e10,
+            daiDepositor,
+            deadline
+        );
+        vm.stopPrank();
+
+        assertEq(IERC20(GTLibrary.pairFor(address(factory), address(dai), address(weth))).balanceOf(daiDepositor), 0);
+        assertApproxEqAbs(daiDepositor.balance, 1 ether, 1e10);
+        assertApproxEqAbs(IERC20(address(dai)).balanceOf(daiDepositor), 10 ether, 1e10);
+    }
+
     /*//////////////////////////////////////////////////////////////
                                   SWAP
     //////////////////////////////////////////////////////////////*/
@@ -423,10 +459,10 @@ contract GTPairRouterTest is Test {
         address[] memory path = new address[](2);
         path[0] = address(weth);
         path[1] = address(usdc);
-        uint256[] memory amounts = wethUsdRouter.getAmountsOut(SWAPPER_INITIAL_WETH, path);
+        uint256[] memory amounts = router.getAmountsOut(SWAPPER_INITIAL_WETH, path);
         uint256 expectedAmount = amounts[1];
         vm.prank(swapper);
-        wethUsdRouter.swapExactTokensForTokens(SWAPPER_INITIAL_WETH, SWAPPER_INITIAL_WETH, path, swapper, deadline);
+        router.swapExactTokensForTokens(SWAPPER_INITIAL_WETH, SWAPPER_INITIAL_WETH, path, swapper, deadline);
 
         assertEq(IERC20(weth).balanceOf(address(swapper)), 0);
         assertEq(IERC20(usdc).balanceOf(address(swapper)), expectedAmount);
@@ -434,7 +470,7 @@ contract GTPairRouterTest is Test {
 
     function testSwapMultipleTokens() public onlyFirstDepositLiquidityAndMintLP {
         vm.prank(daiDepositor);
-        usdcDaiRouter.addLiquidity(
+        router.addLiquidity(
             address(usdc),
             address(dai),
             DEPOSIT_DAI_AMOUNT,
@@ -449,18 +485,19 @@ contract GTPairRouterTest is Test {
         path[1] = address(usdc);
         path[2] = address(dai);
 
-        uint256[] memory amounts = wethUsdRouter.getAmountsOut(SWAPPER_INITIAL_WETH, path);
+        uint256[] memory amounts = router.getAmountsOut(SWAPPER_INITIAL_WETH, path);
         uint256 expectedDai = amounts[2];
 
         vm.prank(swapper);
-        wethUsdRouter.swapExactTokensForTokens(SWAPPER_INITIAL_WETH, SWAPPER_INITIAL_WETH, path, swapper, deadline);
+        router.swapExactTokensForTokens(SWAPPER_INITIAL_WETH, SWAPPER_INITIAL_WETH, path, swapper, deadline);
 
         assertEq(IERC20(address(dai)).balanceOf(swapper), expectedDai);
     }
 
     function test_SwapTokensForExactTokens() public onlyFirstDepositLiquidityAndMintLP {
+        // Using dai depositor to create new pool
         vm.prank(daiDepositor);
-        usdcDaiRouter.addLiquidity(
+        router.addLiquidity(
             address(usdc),
             address(dai),
             DEPOSIT_DAI_AMOUNT,
@@ -475,13 +512,190 @@ contract GTPairRouterTest is Test {
         path[1] = address(usdc);
         path[2] = address(dai);
 
-        uint256[] memory amounts = wethUsdRouter.getAmountsOut(SWAPPER_INITIAL_WETH, path);
+        uint256[] memory amounts = router.getAmountsOut(SWAPPER_INITIAL_WETH, path);
         uint256 expectedDai = amounts[2];
 
         vm.prank(swapper);
-        wethUsdRouter.swapTokensForExactTokens(expectedDai, SWAPPER_INITIAL_WETH, path, swapper, deadline);
+        router.swapTokensForExactTokens(expectedDai, SWAPPER_INITIAL_WETH, path, swapper, deadline);
 
         assertEq(IERC20(address(dai)).balanceOf(swapper), expectedDai);
+    }
+
+    function test_SwapExactEthForTokens() public onlyFirstDepositLiquidityAndMintLP {
+        address[] memory path = new address[](2);
+        path[0] = address(weth);
+        path[1] = address(usdc);
+        vm.deal(swapper, 1 ether);
+        vm.prank(swapper);
+        router.swapExactETHForTokens{value: 1 ether}(1 ether, path, swapper, deadline);
+        assertEq(swapper.balance, 0);
+        // 1 ether from this swap plus inital 10 ether
+        assertEq(IERC20(weth).balanceOf(GTLibrary.pairFor(address(factory), address(weth), address(usdc))), 11 ether);
+        assertGt(IERC20(usdc).balanceOf(swapper), 0);
+    }
+
+    function test_RevertSwapExactEthForTokensInvalidPath() public onlyFirstDepositLiquidityAndMintLP {
+        address[] memory path = new address[](2);
+        path[0] = address(usdc);
+        path[1] = address(weth);
+        vm.deal(swapper, 1 ether);
+        vm.prank(swapper);
+        vm.expectRevert(GTRouter.GTRouter__InvalidPath.selector);
+        router.swapExactETHForTokens{value: 1 ether}(1 ether, path, swapper, deadline);
+    }
+
+    // function test_RevertSwapExactEthForTokensInsufficientOutput() public onlyFirstDepositLiquidityAndMintLP {
+    //     address[] memory path = new address[](2);
+    //     path[0] = address(weth);
+    //     path[1] = address(usdc);
+    //     vm.deal(swapper, 1 ether);
+    //     vm.prank(swapper);
+    //     vm.expectRevert(GTRouter.GTRouter__InsufficientOutputAmount.selector);
+    //     router.swapExactETHForTokens{value: 1 ether}(100 ether, path, swapper, deadline);
+    // }
+
+    function test_SwapTokensForExactEth() public onlyFirstDepositLiquidityAndMintLP {
+        vm.deal(address(router), 10 ether);
+        vm.prank(address(router));
+        weth.deposit{value: 1 ether}();
+        address[] memory path = new address[](2);
+        path[0] = address(usdc);
+        path[1] = address(weth);
+        usdc.mint(swapper, 3000 ether);
+        uint256 initialSwapperUsdc = IERC20(address(usdc)).balanceOf(swapper);
+        assertEq(initialSwapperUsdc, 3000 ether);
+        vm.prank(swapper);
+        router.swapTokensForExactETH(1 ether, 2300 ether, path, swapper, deadline);
+        assertEq(
+            IERC20(address(usdc)).balanceOf(swapper),
+            initialSwapperUsdc
+                - (IERC20(usdc).balanceOf(GTLibrary.pairFor(address(factory), address(weth), address(usdc))) - 20_000 ether)
+        );
+
+        assertEq(swapper.balance, 1 ether);
+    }
+
+    function test_RevertSwapTokensForExactEthInvalidPath() public onlyFirstDepositLiquidityAndMintLP {
+        address[] memory path = new address[](2);
+        path[0] = address(weth);
+        path[1] = address(usdc);
+        vm.prank(swapper);
+        vm.expectRevert(GTRouter.GTRouter__InvalidPath.selector);
+        router.swapTokensForExactETH(1 ether, 2300 ether, path, swapper, deadline);
+    }
+
+    function test_RevertSwapTokensForExactEthExcessiveInput() public onlyFirstDepositLiquidityAndMintLP {
+        vm.deal(address(router), 10 ether);
+        vm.prank(address(router));
+        weth.deposit{value: 1 ether}();
+        address[] memory path = new address[](2);
+        path[0] = address(usdc);
+        path[1] = address(weth);
+        usdc.mint(swapper, 3000 ether);
+        vm.prank(swapper);
+        vm.expectRevert(GTRouter.GTRouter__ExcessiveInputAmount.selector);
+        router.swapTokensForExactETH(1 ether, 2000 ether, path, swapper, deadline);
+    }
+
+    function test_SwapExactTokensForETH() public onlyFirstDepositLiquidityAndMintLP {
+        vm.deal(address(router), 10 ether);
+        vm.prank(address(router));
+        weth.deposit{value: 1 ether}();
+        address[] memory path = new address[](2);
+        path[0] = address(usdc);
+        path[1] = address(weth);
+        usdc.mint(swapper, 2000 ether);
+        vm.prank(swapper);
+        router.swapExactTokensForETH(2000 ether, 0.8 ether, path, swapper, deadline);
+        assertGt(swapper.balance, 0.8 ether);
+    }
+
+    function test_RevertSwapExactTokensForETHInvalidPath() public onlyFirstDepositLiquidityAndMintLP {
+        address[] memory path = new address[](2);
+        path[0] = address(weth);
+        path[1] = address(usdc);
+        vm.prank(swapper);
+        vm.expectRevert(GTRouter.GTRouter__InvalidPath.selector);
+        router.swapExactTokensForETH(2000 ether, 0.8 ether, path, swapper, deadline);
+    }
+
+    function test_RevertSwapExactTokensForEthInsufficientOut() public onlyFirstDepositLiquidityAndMintLP {
+        vm.deal(address(router), 10 ether);
+        vm.prank(address(router));
+        weth.deposit{value: 1 ether}();
+        address[] memory path = new address[](2);
+        path[0] = address(usdc);
+        path[1] = address(weth);
+        usdc.mint(swapper, 2000 ether);
+        vm.prank(swapper);
+        vm.expectRevert(GTRouter.GTRouter__InsufficientOutputAmount.selector);
+        router.swapExactTokensForETH(2000 ether, 1 ether, path, swapper, deadline);
+    }
+
+    function test_SwapETHForExactTokens() public onlyFirstDepositLiquidityAndMintLP {
+        address[] memory path = new address[](2);
+        path[0] = address(weth);
+        path[1] = address(usdc);
+        vm.deal(swapper, 1 ether);
+        vm.prank(swapper);
+        router.swapETHForExactTokens{value: 1 ether}(1500 ether, path, swapper, deadline);
+        assertEq(IERC20(usdc).balanceOf(swapper), 1500 ether);
+        // As there will be remaining ETH unused in the swap (we overpaid), we should expect a refund.
+        assertGt(swapper.balance, 0);
+    }
+
+    function test_RevertSwapETHForExactTokensInvalidPath() public onlyFirstDepositLiquidityAndMintLP {
+        address[] memory path = new address[](2);
+        path[0] = address(usdc);
+        path[1] = address(weth);
+        vm.deal(swapper, 1 ether);
+        vm.prank(swapper);
+        vm.expectRevert(GTRouter.GTRouter__InvalidPath.selector);
+        router.swapETHForExactTokens{value: 1 ether}(1500 ether, path, swapper, deadline);
+    }
+
+    function test_RevertSwapETHForExactTokensExcessiveInputAmount() public onlyFirstDepositLiquidityAndMintLP {
+        address[] memory path = new address[](2);
+        path[0] = address(weth);
+        path[1] = address(usdc);
+        vm.deal(swapper, 1 ether);
+        vm.prank(swapper);
+        vm.expectRevert(GTRouter.GTRouter__ExcessiveInputAmount.selector);
+        // 1 ether ≠ 2000 USDC due to pool rebalancing
+        router.swapETHForExactTokens{value: 1 ether}(2000 ether, path, swapper, deadline);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                  SYNC
+    //////////////////////////////////////////////////////////////*/
+
+    function test_syncSuccessful() public {
+        (uint112 initialReserve0, uint112 initialReserve1,) = IGTPair(address(wethUsdcPair)).getReserves();
+        assertEq(initialReserve0, 0);
+        assertEq(initialReserve1, 0);
+        weth.mint(address(wethUsdcPair), 1 ether);
+        usdc.mint(address(wethUsdcPair), 1 ether);
+
+        IGTPair(address(wethUsdcPair)).sync();
+
+        (uint112 updatedReserve0, uint112 updatedReserve1,) = IGTPair(address(wethUsdcPair)).getReserves();
+        assertEq(updatedReserve0, 1 ether);
+        assertEq(updatedReserve1, 1 ether);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                  SKIM
+    //////////////////////////////////////////////////////////////*/
+
+    function test_SkimSuccessful() public onlyFirstDepositLiquidityAndMintLP {
+        address emptyAddress = makeAddr("emptyAddress");
+        weth.mint(address(wethUsdcPair), 1 ether);
+        usdc.mint(address(wethUsdcPair), 1 ether);
+
+        IGTPair(wethUsdcPair).skim(emptyAddress);
+
+        assertEq(IERC20(address(weth)).balanceOf(emptyAddress), 1 ether);
+        assertEq(IERC20(address(usdc)).balanceOf(emptyAddress), 1 ether);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -491,7 +705,7 @@ contract GTPairRouterTest is Test {
     function test_RevertDeadlinePassedAddLiquidity() public {
         vm.expectRevert(GTRouter.GTRouter__DeadlinePassed.selector);
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             FIRST_DEPOSIT_WETH_AMOUNT,
@@ -506,7 +720,7 @@ contract GTPairRouterTest is Test {
 
     function test_RevertDeadlinePassedRemoveLiquidity() public {
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             FIRST_DEPOSIT_WETH_AMOUNT,
@@ -520,7 +734,7 @@ contract GTPairRouterTest is Test {
 
         vm.startPrank(firstLiquidityProvider);
         vm.expectRevert(GTRouter.GTRouter__DeadlinePassed.selector);
-        wethUsdRouter.removeLiquidity(
+        router.removeLiquidity(
             address(weth),
             address(usdc),
             1,
@@ -535,7 +749,7 @@ contract GTPairRouterTest is Test {
     function test_RevertAddLiquidityLessThanMinimumAcceptedB() public {
         // On first deposit to a new pair, amounts = FIRST_DEPOSIT_WETH_AMOUNT and FIRST_DEPOSIT_USDC_AMOUNT instantly
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             FIRST_DEPOSIT_WETH_AMOUNT,
@@ -552,7 +766,7 @@ contract GTPairRouterTest is Test {
         weth.mint(address(wethUsdcPair), 100 ether);
         vm.expectRevert(GTRouter.GTRouter__InsufficientBAmount.selector);
         vm.startPrank(firstLiquidityProvider);
-        wethUsdRouter.addLiquidity(
+        router.addLiquidity(
             address(weth),
             address(usdc),
             FIRST_DEPOSIT_WETH_AMOUNT,

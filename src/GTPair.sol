@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {LP} from "./LP.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IGTFactory} from "./interfaces/IGTFactory.sol";
 
 contract GTPair is LP, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -38,6 +39,8 @@ contract GTPair is LP, ReentrancyGuard {
     uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3; // 1,000 LP tokens
     uint256 public constant FEE = 3; // 0.3%
     uint256 public constant FEE_PRECISION = 1000;
+
+    uint256 public kLast;
 
     event Sync(uint112 reserve0, uint112 reserve1);
     event Swap(
@@ -121,7 +124,7 @@ contract GTPair is LP, ReentrancyGuard {
                 balance0Adjusted * balance1Adjusted, (uint256(reserve0) * reserve1) * (FEE_PRECISION ** 2)
             );
         }
-        _updateReserves(balance0, balance1);
+        _update(balance0, balance1);
         emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
     }
 
@@ -140,6 +143,7 @@ contract GTPair is LP, ReentrancyGuard {
         uint256 amount0 = balance0 - reserve0;
         uint256 amount1 = balance1 - reserve1;
 
+        bool feeOn = _mintFee(reserve0, reserve1);
         // The current total supply of LP tokens.
         uint256 _totalSupply = totalSupply();
         // If it's the first deposit...
@@ -159,8 +163,10 @@ contract GTPair is LP, ReentrancyGuard {
             revert GTPair__InsufficientLiquidityMinted();
         }
         _mint(to, liquidity);
-        _updateReserves(balance0, balance1);
-        // @note Look at fee
+        _update(balance0, balance1);
+        if (feeOn) {
+            kLast = (reserve0 * reserve1);
+        }
         emit Mint(msg.sender, amount0, amount1);
     }
 
@@ -171,7 +177,7 @@ contract GTPair is LP, ReentrancyGuard {
      * @return amount1 The amount of i_token1 we send the user.
      */
     function burn(address to) external returns (uint256 amount0, uint256 amount1) {
-        // (uint112 reserve0, uint112 reserve1,) = getReserves();
+        (uint112 reserve0, uint112 reserve1,) = getReserves();
         address token0 = s_token0;
         address token1 = s_token1;
         uint256 balance0 = IERC20(s_token0).balanceOf(address(this));
@@ -180,7 +186,7 @@ contract GTPair is LP, ReentrancyGuard {
         // Gets the amount of tokens sent in with the transaction.
         // As the pool originally has no tokens, any increase will be the tokens transerred via this transaction.
         uint256 liquidity = balanceOf(address(this));
-
+        bool feeOn = _mintFee(reserve0, reserve1);
         uint256 _totalSupply = totalSupply();
 
         amount0 = (liquidity * balance0) / _totalSupply;
@@ -196,8 +202,10 @@ contract GTPair is LP, ReentrancyGuard {
         balance0 = IERC20(token0).balanceOf(address(this));
         balance1 = IERC20(token1).balanceOf(address(this));
 
-        _updateReserves(balance0, balance1);
-        // @note Look at fee
+        _update(balance0, balance1);
+        if (feeOn) {
+            kLast = (reserve0 * reserve1);
+        }
         emit Burn(msg.sender, amount0, amount1, to);
     }
 
@@ -216,14 +224,76 @@ contract GTPair is LP, ReentrancyGuard {
      * @param balance0 The updated token0 balance.
      * @param balance1 The updated token1 balance.
      */
-    function _updateReserves(uint256 balance0, uint256 balance1) internal {
+    function _update(uint256 balance0, uint256 balance1) internal {
         s_reserve0 = uint112(balance0);
         s_reserve1 = uint112(balance1);
         s_blockTimestampLast = uint32(block.timestamp);
         emit Sync(s_reserve0, s_reserve1);
     }
 
+    /**
+     * @notice Mints the feeAddress 1/6 of the proportion increase in k since kLast was updated.
+     * @param reserve0 The pre-minted/burned/swapped reserve0
+     * @param reserve1 The pre=minted/burned/swapped reserve1
+     */
+    function _mintFee(uint256 reserve0, uint256 reserve1) private returns (bool feeOn) {
+        address feeTo = IGTFactory(i_factory).feeAddress();
+        // If feeTo is not address(0), there is an assigned fee address.
+        feeOn = feeTo != address(0);
+        uint256 _kLast = kLast;
+        if (feeOn) {
+            if (_kLast != 0) {
+                // The current rootK
+                uint256 rootK = Math.sqrt(reserve0 * reserve1);
+                // The last rootK
+                uint256 rootKLast = Math.sqrt(_kLast);
+                // If the current rookK is greater, the pool has grown.
+                if (rootK > rootKLast) {
+                    // Scale the difference increase by LP standards
+                    uint256 numerator = totalSupply() * (rootK - rootKLast);
+                    uint256 denominator = (rootK * 5) + rootKLast;
+                    // 1/6 of the pool growth minted to feeAddress.
+                    // Lets say pool doubled (in k terms) from 100 (rootKLast) to 200 )(rootK).
+                    // numerator (say 1000 LP tokens supply) = 1000 * (rootK - rootKLast) = 100,000
+                    // denominator = 1000 + 100 = 1100
+                    // liquidity = 100,000 / 1100 = 90.9 (90) LP tokens
+
+                    uint256 liquidity = numerator / denominator;
+                    if (liquidity > 0) {
+                        _mint(feeTo, liquidity);
+                    }
+                }
+            }
+        } else if (_kLast != 0) {
+            kLast = 0;
+        }
+    }
+
+    /**
+     * @notice Gets the pair tokens in the pool.
+     * @return The first token.
+     * @return The second token.
+     */
     function getTokens() external view returns (address, address) {
         return (s_token0, s_token1);
+    }
+
+    /**
+     * @notice Transfers any tokens which are not accounted for in the reserves to the 'to' address. These tokens may have been donations from adding extra liquidity beyond the required ratio amount.
+     * @param to The address receiving the tokens.
+     */
+    function skim(address to) external nonReentrant {
+        address token0 = s_token0;
+        address token1 = s_token1;
+
+        IERC20(token0).safeTransfer(to, IERC20(token0).balanceOf(address(this)) - s_reserve0);
+        IERC20(token1).safeTransfer(to, IERC20(token1).balanceOf(address(this)) - s_reserve1);
+    }
+
+    /**
+     * @notice Forces the reserves to be updated. As s_reserve0 and s_reserve1 are seperated from the actual reserves (token.balanceOf), reserves can become out of sync. This function syncs them. Without this function, they are only synced through someone calling either swap, mint or burn.
+     */
+    function sync() external nonReentrant {
+        _update(IERC20(s_token0).balanceOf(address(this)), IERC20(s_token1).balanceOf(address(this)));
     }
 }

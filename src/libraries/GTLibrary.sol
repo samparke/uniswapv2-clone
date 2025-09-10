@@ -220,7 +220,7 @@ library GTLibrary {
         uint256 numerator = reserveIn * amountOut * FEE_PRECISION;
         // denominator = (100 - 9) * 997 = 90,727
         uint256 denominator = (reserveOut - amountOut) * (FEE_PRECISION - FEE);
-        // amoountIn = (900,000 + 90,727 - 1) / 90,727 = 10.91, rounded down to 10. 10 tokens in for 9 tokens out.
+        // amountIn = (900,000 + 90,727 - 1) / 90,727 = 10.91, rounded down to 10. 10 tokens in for 9 tokens out.
         amountIn = (numerator + denominator - 1) / denominator;
     }
 }

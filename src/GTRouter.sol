@@ -8,9 +8,12 @@ import {GTLibrary} from "../src/libraries/GTLibrary.sol";
 import {IGTPair} from "./interfaces/IGTPair.sol";
 import {console2} from "forge-std/Test.sol";
 import {IGTRouter} from "./interfaces/IGTRouter.sol";
+import {IWETH} from "./interfaces/IWETH.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract GTRouter is IGTRouter {
+contract GTRouter is IGTRouter, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using SafeERC20 for IWETH;
 
     error GTRouter__DeadlinePassed();
     error GTRouter__TokensCannotBeTheSame();
@@ -20,8 +23,13 @@ contract GTRouter is IGTRouter {
     error GTRouter__InsufficientAAmount();
     error GTRouter__InsufficientAmountOut();
     error GTRouter__ExcessiveInputAmount();
+    error GTRouter__MustBeWethAddress();
+    error GTRouter__TransferFailed();
+    error GTRouter__InvalidPath();
+    error GTRouter__InsufficientOutputAmount();
 
     address public immutable override i_factory;
+    address public immutable override i_weth;
 
     uint256 public constant FEE = 3; // 0.3%
     uint256 public constant FEE_PRECISION = 1000;
@@ -33,8 +41,15 @@ contract GTRouter is IGTRouter {
         _;
     }
 
-    constructor(address factory) {
+    constructor(address factory, address weth) {
         i_factory = factory;
+        i_weth = weth;
+    }
+
+    receive() external payable {
+        if (msg.sender != i_weth) {
+            revert GTRouter__MustBeWethAddress();
+        }
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -83,10 +98,10 @@ contract GTRouter is IGTRouter {
                 // If amountBOptimal needed to match the pools ratio is greater than the users amountBDesired, assess whether the reverse is possible.
                 uint256 amountAOptimal = GTLibrary.quote(amountBDesired, reserveB, reserveA);
                 // The amount of token A the user wants to deposit must be greater or equal to the required amount.
-                assert(amountAOptimal <= amountADesired);
-                console2.log("amountAMin", amountAMin);
-                console2.log("amountAOptimal", amountAOptimal);
-                console2.log("amountADesired", amountADesired);
+
+                if (amountAOptimal > amountADesired) {
+                    revert GTRouter__InsufficientAAmount();
+                }
                 // If it does, but its less than the minimum acceptable amount from the user, revert.
                 if (amountAMin > amountAOptimal) {
                     revert GTRouter__InsufficientAAmount();
@@ -127,6 +142,51 @@ contract GTRouter is IGTRouter {
         liquidity = IGTPair(pair).mint(to);
     }
 
+    /**
+     * @notice Allows liquidity provider to deposit ETH as liquidity.
+     * @dev A liquidity provider sends native ETH with this transaction, the protocol deposits this value to the WETH9 contract, which mints WETH. This then follows any other deposit of liquidity: transfer to pair address and mint the liquidity provider LP.
+     * @param token The pairing token with ETH (WETH).
+     * @param amountTokenDesired The amount of token desired to be deposited as liquidity.
+     * @param amountTokenMin The amount of the token that the liquidity provider accepts as a minimum to be deposited as liquidity.
+     * @param amountETHMin The amount of ETH that the liquidity provider accepts as a minimum to be deposited as liquidity.
+     * @param to The recipient of the LP tokens.
+     * @param deadline How long the liquidity provider is willing to wait for the deposit to be successful.
+     * @return amountToken The amount of token that was deposited as liquidity.
+     * @return amountETH The amount of ETH that was deposited as liquidity.
+     * @return liquidity The amount of LP tokens minted to the liquidity provider.
+     */
+    function addLiquidityETH(
+        address token,
+        uint256 amountTokenDesired,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        address to,
+        uint256 deadline
+    )
+        external
+        payable
+        virtual
+        override
+        ensure(deadline)
+        nonReentrant
+        returns (uint256 amountToken, uint256 amountETH, uint256 liquidity)
+    {
+        (amountToken, amountETH) =
+            _addLiquidity(token, i_weth, amountTokenDesired, msg.value, amountTokenMin, amountETHMin);
+        address pair = GTLibrary.pairFor(i_factory, token, i_weth);
+        IERC20(token).safeTransferFrom(msg.sender, pair, amountToken);
+        IWETH(i_weth).deposit{value: amountETH}();
+        IERC20(i_weth).safeTransfer(pair, amountETH);
+        liquidity = IGTPair(pair).mint(to);
+        // If the ETH value sent exceeded the WETH deposited, refund the remaining ETH to the liquidity provider.
+        if (msg.value > amountETH) {
+            (bool success,) = payable(msg.sender).call{value: msg.value - amountETH}("");
+            if (!success) {
+                revert GTRouter__TransferFailed();
+            }
+        }
+    }
+
     /*//////////////////////////////////////////////////////////////
                             REMOVE LIQUIDITY
     //////////////////////////////////////////////////////////////*/
@@ -163,6 +223,35 @@ contract GTRouter is IGTRouter {
         }
         if (amountBMin > amountB) {
             revert GTRouter__InsufficientBAmount();
+        }
+    }
+
+    /**
+     * @notice Removes ETH liquidity from a pool, burns LP tokens, and transfers token and ETH back to liquidity provider.
+     * @param token The pairing token with ETH.
+     * @param liquidity The amount of LP tokens to burn.
+     * @param amountTokenMin The minimum amount of token the liquidity provider is willing to be transfered back.
+     * @param amountETHMin The minimum amount of ETH the liquidity provider is willing to be transfered back.
+     * @param to The address receiving the tokens and ETH transfer.
+     * @param deadline The amount of time the liquidity provider is willing to wait to remove liquidity.
+     * @return amountToken The amount of token transfered back to the liquidity provider.
+     * @return amountETH The amount of ETH transfered back to the liquidity provider.
+     */
+    function removeLiquidityETH(
+        address token,
+        uint256 liquidity,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        address to,
+        uint256 deadline
+    ) public virtual override ensure(deadline) nonReentrant returns (uint256 amountToken, uint256 amountETH) {
+        (amountToken, amountETH) =
+            removeLiquidity(token, i_weth, liquidity, amountTokenMin, amountETHMin, address(this), deadline);
+        IERC20(token).safeTransfer(to, amountToken);
+        IWETH(i_weth).withdraw(amountETH);
+        (bool success,) = payable(to).call{value: amountETH}("");
+        if (!success) {
+            revert GTRouter__TransferFailed();
         }
     }
 
@@ -212,6 +301,15 @@ contract GTRouter is IGTRouter {
         IERC20(path[0]).safeTransferFrom(msg.sender, GTLibrary.pairFor(i_factory, path[0], path[1]), amountIn);
         _swap(amounts, path, to);
     }
+    // * @note Rewrite most natsepc for accuracy
+    /**
+     * @notice User defines the amount of tokens they would like to receive, and this calculates the required amount in the has has to input.
+     * @param amountOut The amounts out the user wants.
+     * @param amountInMax The maximum amount the user is willing to swap in for the desired amount out.
+     * @param path The path of tokens to swap. The first is the swap in token from the user, the last is the swap out token from the protocol.
+     * @param to The recipient of the output tokens.
+     * @param deadline The amount of time the user is willing to wait for the swap.
+     */
 
     function swapTokensForExactTokens(
         uint256 amountOut,
@@ -226,6 +324,131 @@ contract GTRouter is IGTRouter {
         }
         IERC20(path[0]).safeTransferFrom(msg.sender, GTLibrary.pairFor(i_factory, path[0], path[1]), amounts[0]);
         _swap(amounts, path, to);
+    }
+
+    /**
+     * @notice Allows a user to transfer native ETH, and receive an ERC20 token from a pool.
+     * @param amountOutMin The minimum amount the user is willing to accept for the amount of ETH transfered in.
+     * @param path The path of tokens to swap.
+     * @param to The recipient of the tokens out.
+     * @param deadline The amount of time the user is willing to wait to swap.
+     */
+    function swapExactETHForTokens(uint256 amountOutMin, address[] calldata path, address to, uint256 deadline)
+        external
+        payable
+        virtual
+        override
+        ensure(deadline)
+        returns (uint256[] memory amounts)
+    {
+        if (path[0] != i_weth) {
+            revert GTRouter__InvalidPath();
+        }
+        amounts = getAmountsOut(msg.value, path);
+        if (amounts[amounts.length - 1] < amountOutMin) {
+            revert GTRouter__InsufficientOutputAmount();
+        }
+        IWETH(i_weth).deposit{value: amounts[0]}();
+        IWETH(i_weth).safeTransfer(GTLibrary.pairFor(address(i_factory), path[0], path[1]), amounts[0]);
+        _swap(amounts, path, to);
+    }
+
+    /**
+     * @notice Given a desired amount of ETH, this function calculates the necessary input token, swaps for WETH, and then transfers native ETH to the 'to' address.
+     * @param amountOut The amount of ETH the user wants from the swap.
+     * @param amountInMax The maximum amount the user is willing to swap in to receive the amountOut.
+     * @param path The path of tokens in the swap.
+     * @param to The recipient of the ETH.
+     * @param deadline The maximum amount of time the user is willing to wait for the swap.
+     */
+    function swapTokensForExactETH(
+        uint256 amountOut,
+        uint256 amountInMax,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external payable virtual override ensure(deadline) returns (uint256[] memory amounts) {
+        if (path[path.length - 1] != i_weth) {
+            revert GTRouter__InvalidPath();
+        }
+        amounts = getAmountsIn(amountOut, path);
+        if (amounts[0] > amountInMax) {
+            revert GTRouter__ExcessiveInputAmount();
+        }
+        IERC20(path[0]).safeTransferFrom(
+            msg.sender, GTLibrary.pairFor(address(i_factory), path[0], path[1]), amounts[0]
+        );
+        _swap(amounts, path, address(this));
+        IWETH(i_weth).withdraw(amounts[amounts.length - 1]);
+        (bool success,) = payable(to).call{value: amounts[amounts.length - 1]}("");
+        if (!success) {
+            revert GTRouter__TransferFailed();
+        }
+    }
+
+    /**
+     * @notice Given an exact amount of input tokens, swaps for equivalent amount of ETH.
+     * @param amountIn The amount of tokens being swapped in.
+     * @param amountOutMin The minimum amount of ETH accepted out of the swap.
+     * @param path The path of tokens in the swap.
+     * @param to The recipient of the ETH.
+     * @param deadline The maximum time the user is willing to wait to complete the swap.
+     */
+    function swapExactTokensForETH(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external virtual override ensure(deadline) returns (uint256[] memory amounts) {
+        if (path[path.length - 1] != i_weth) {
+            revert GTRouter__InvalidPath();
+        }
+        amounts = getAmountsOut(amountIn, path);
+        if (amounts[amounts.length - 1] < amountOutMin) {
+            revert GTRouter__InsufficientOutputAmount();
+        }
+        IERC20(path[0]).safeTransferFrom(msg.sender, GTLibrary.pairFor(address(i_factory), path[0], path[1]), amountIn);
+        _swap(amounts, path, address(this));
+        IWETH(i_weth).withdraw(amounts[amounts.length - 1]);
+        (bool success,) = payable(to).call{value: amounts[amounts.length - 1]}("");
+        if (!success) {
+            revert GTRouter__TransferFailed();
+        }
+    }
+
+    /**
+     * @notice Given an exact tokens desired out from a swap, swaps a users ETH transfer (if sufficient), and refunds the remainder.
+     * @param amountOut The amount out desired for the final token in the path.
+     * @param path The path of tokens in the swap.
+     * @param to The recipient of the output tokens.
+     * @param deadline The maximum amount of time the user is willing to wait for the swap to complete.
+     */
+    function swapETHForExactTokens(uint256 amountOut, address[] calldata path, address to, uint256 deadline)
+        external
+        payable
+        virtual
+        override
+        nonReentrant
+        ensure(deadline)
+        returns (uint256[] memory amounts)
+    {
+        if (path[0] != i_weth) {
+            revert GTRouter__InvalidPath();
+        }
+        amounts = getAmountsIn(amountOut, path);
+        if (amounts[0] > msg.value) {
+            revert GTRouter__ExcessiveInputAmount();
+        }
+        IWETH(i_weth).deposit{value: amounts[0]}();
+        IWETH(i_weth).safeTransfer(GTLibrary.pairFor(i_factory, path[0], path[1]), amounts[0]);
+        _swap(amounts, path, to);
+        if (msg.value > amounts[0]) {
+            (bool success,) = payable(msg.sender).call{value: msg.value - amounts[0]}("");
+            if (!success) {
+                revert GTRouter__TransferFailed();
+            }
+        }
     }
 
     /*//////////////////////////////////////////////////////////////

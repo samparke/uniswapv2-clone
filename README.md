@@ -48,3 +48,4 @@ A library which contains useful functions which are often be called within the `
 - Invariant tests
 - Checking for gas opimisations
 - Refinement of natspec and ensuring alingment with the correct naming convensions
+- Usage as an oracle

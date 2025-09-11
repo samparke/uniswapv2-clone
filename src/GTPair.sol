@@ -134,7 +134,6 @@ contract GTPair is LP, ReentrancyGuard {
      * @return liquidity The number of LP tokens we minted.
      */
     function mint(address to) external returns (uint256 liquidity) {
-        // Tokens have been transferred in from the Router.
         (uint112 reserve0, uint112 reserve1,) = getReserves();
         uint256 balance0 = IERC20(s_token0).balanceOf(address(this));
         uint256 balance1 = IERC20(s_token1).balanceOf(address(this));

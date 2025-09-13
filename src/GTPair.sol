@@ -7,9 +7,11 @@ import {LP} from "./LP.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IGTFactory} from "./interfaces/IGTFactory.sol";
+import {UQ112x112} from "./libraries/UQ112x112.sol";
 
 contract GTPair is LP, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using UQ112x112 for uint224;
 
     error GTPair__InsufficientOutputAmount();
     error GTPair__InsufficientPoolLiquidity();
@@ -25,6 +27,7 @@ contract GTPair is LP, ReentrancyGuard {
     error GTPair__InsufficientInputAmount();
     error GTPair__InvalidK(uint256 actualK, uint256 expectedK);
     error GTPair__MustBeFactory();
+    error GTPair__Overflow();
 
     address public s_token0;
     address public s_token1;
@@ -40,6 +43,8 @@ contract GTPair is LP, ReentrancyGuard {
     uint256 public constant FEE = 3; // 0.3%
     uint256 public constant FEE_PRECISION = 1000;
 
+    uint256 public price0CumulativeLast;
+    uint256 public price1CumulativeLast;
     uint256 public kLast;
 
     event Sync(uint112 reserve0, uint112 reserve1);
@@ -223,7 +228,22 @@ contract GTPair is LP, ReentrancyGuard {
      * @param balance0 The updated token0 balance.
      * @param balance1 The updated token1 balance.
      */
-    function _update(uint256 balance0, uint256 balance1) internal {
+    function _update(uint256 balance0, uint256 balance1, uint112 reserve0, uint112 reserve1) internal {
+        if (balance0 > type(uint112).max || balance1 > type(uint112).max) {
+            revert GTPair__Overflow();
+        }
+        uint32 blockTimestamp = uint32(block.timestamp % 2 ** 32);
+
+        // @note unsure if this correct. come back to this
+        unchecked {
+            uint32 timeElapsed = blockTimestamp - s_blockTimestampLast;
+        }
+
+        if (timeElapsed > 0 && reserve0 != 0 && reserve1 != 0) {
+            price0CumulativeLast += uint256(UQ112x112.encode(reserve1).uqdiv(reserve0)) * timeElapsed;
+            price1CumulativeLast += uint256(UQ112x112.encode(reserve0).uqdiv(reserve1)) * timeElapsed;
+        }
+
         s_reserve0 = uint112(balance0);
         s_reserve1 = uint112(balance1);
         s_blockTimestampLast = uint32(block.timestamp);
